@@ -74,6 +74,18 @@ void PrintShader()
     std::print("It does nothing :3\n");
 }
 
+
+struct CandidateDeviceInfo
+{
+    VkPhysicalDevice Device;
+    std::string Name;
+    uint32_t Score;
+    uint32_t Queue;
+    bool HasAnyCompute;
+    bool HasDeviceLocalHostVisible;
+};
+
+
 int main()
 {
     std::set<std::string> RequestedLayers;
@@ -141,11 +153,12 @@ int main()
         if (Result != VK_SUCCESS)
         {
             std::print("Instance creation failed with error code: {}\n", (int)Result);
-            return 1;
+            return 0;
         }
     }
 
     VkPhysicalDevice PhysicalDevice;
+    uint32_t QueueFamilyIndex = -1;
     {
         uint32_t PhysicalDeviceCount = 0;
         std::vector<VkPhysicalDevice> AvailableDevices;
@@ -153,14 +166,22 @@ int main()
         AvailableDevices.resize(PhysicalDeviceCount);
         Result = vkEnumeratePhysicalDevices(Instance, &PhysicalDeviceCount, AvailableDevices.data());
 
-        std::print("Available Physical Devices:\n");
+        std::vector<CandidateDeviceInfo> IdentifiedDevices;
+        int32_t BestDevice = -1;
+        uint32_t BestScore = (uint32_t)-1;
 
         for (VkPhysicalDevice AvailableDevice : AvailableDevices)
         {
+            const int32_t DeviceIndex = IdentifiedDevices.size();
+            CandidateDeviceInfo& Candidate = IdentifiedDevices.emplace_back();
+            Candidate.Device = AvailableDevice;
+            Candidate.Score = (uint32_t)-1;
+
             VkPhysicalDeviceProperties Properties;
             vkGetPhysicalDeviceProperties(AvailableDevice, &Properties);
+            Candidate.Name = Properties.deviceName;
 
-            bool HasAnyCompute = false;
+            Candidate.HasAnyCompute = false;
             std::vector<VkQueueFamilyProperties> QueueFamilyProperties;
             {
                 uint32_t QueueFamilyPropertyCount = 0;
@@ -168,19 +189,21 @@ int main()
                 QueueFamilyProperties.resize(QueueFamilyPropertyCount);
                 vkGetPhysicalDeviceQueueFamilyProperties(AvailableDevice, &QueueFamilyPropertyCount, QueueFamilyProperties.data());
 
+                int QueueIndex = 0;
+                Candidate.Queue = -1;
                 for (VkQueueFamilyProperties FamilyProperties : QueueFamilyProperties)
                 {
                     if ((FamilyProperties.queueFlags & VK_QUEUE_COMPUTE_BIT) == VK_QUEUE_COMPUTE_BIT)
                     {
-                        HasAnyCompute = true;
+                        Candidate.Queue = QueueIndex;
+                        Candidate.HasAnyCompute = true;
                         break;
                     }
+                    ++QueueIndex;
                 }
             }
 
-            std::print(" - {}\n", Properties.deviceName);
-
-            bool HasDeviceLocalHostVisible = false;
+            Candidate.HasDeviceLocalHostVisible = false;
             VkPhysicalDeviceMemoryProperties MemoryProperties;
             vkGetPhysicalDeviceMemoryProperties(AvailableDevice, &MemoryProperties);
             //for (int MemoryTypeIndex = 0; MemoryTypeIndex < MemoryProperties.memoryTypeCount; ++MemoryTypeIndex)
@@ -207,24 +230,94 @@ int main()
 
                 if (HasDeviceLocal && HasHostVisible)
                 {
-                    HasDeviceLocalHostVisible = true;
+                    Candidate.HasDeviceLocalHostVisible = true;
+                }
+            }
+
+            if (Candidate.HasAnyCompute && Candidate.HasDeviceLocalHostVisible)
+            {
+                if (Properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+                {
+                    Candidate.Score = 0;
+                }
+                else if (Properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU)
+                {
+                    Candidate.Score = 1;
+                }
+                else
+                {
+                    Candidate.Score = 2;
                 }
 
-                std::print("   {}:", MemoryType.heapIndex);
-#define PRINT_FLAG(FLAG, SIGIL) std::print(" {}", HAS_FLAG(MemoryType.propertyFlags, FLAG) ? SIGIL : "--")
-                PRINT_FLAG(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "DL");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, "HV");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, "HC");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_HOST_CACHED_BIT, "HA");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT, "LA");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_PROTECTED_BIT, ":P");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD, "DC");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD, "DU");
-                PRINT_FLAG(VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV, "RC");
-#undef PRINT_FLAG
-                std::print("\n");
+                if (BestDevice == -1 || (Candidate.Score < BestScore))
+                {
+                    BestDevice = DeviceIndex;
+                    BestScore = Candidate.Score;
+                }
             }
-            std::print("\n");
+        }
+
+        if (BestDevice == -1)
+        {
+            std::print("No suitable GPU available.\n");
+            goto destroy_instance;
+        }
+
+        PhysicalDevice = IdentifiedDevices[BestDevice].Device;
+        QueueFamilyIndex = IdentifiedDevices[BestDevice].Queue;
+
+        std::print("Available Instance Layers:\n");
+        for (uint32_t DeviceIndex = 0; DeviceIndex < IdentifiedDevices.size(); ++DeviceIndex)
+        {
+            CandidateDeviceInfo DeviceInfo = IdentifiedDevices[DeviceIndex];
+            if (DeviceIndex == BestDevice)
+            {
+                std::print(" + [Selected] {}{}{}\n", FG(46), DeviceInfo.Name, ANSI_RESET);
+            }
+            else if (DeviceInfo.Score <= 1)
+            {
+                std::print(" {}~ (Adequate) {}{}\n", FG(240), DeviceInfo.Name, ANSI_RESET);
+            }
+            else if (DeviceInfo.Score <= 1)
+            {
+                std::print(" {}- (Rejected) {}{}\n", FG(240), DeviceInfo.Name, ANSI_RESET);
+            }
+        }
+    }
+    std::print("\n");
+
+    VkDevice Device;
+    {
+        float Priority[] = { 1.0 };
+        VkDeviceQueueCreateInfo QueueCreateInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .queueFamilyIndex = QueueFamilyIndex,
+            .queueCount = 1,
+            .pQueuePriorities = Priority,
+        };
+
+        VkDeviceCreateInfo DeviceCreateInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .queueCreateInfoCount = 1,
+            .pQueueCreateInfos = &QueueCreateInfo,
+            .enabledLayerCount = 0,
+            .ppEnabledLayerNames = nullptr,
+            .enabledExtensionCount = 0,
+            .ppEnabledExtensionNames = nullptr,
+            .pEnabledFeatures = nullptr
+        };
+
+        VkResult Result = vkCreateDevice(PhysicalDevice, &DeviceCreateInfo, nullptr, &Device);
+        if (Result != VK_SUCCESS)
+        {
+            std::print("Logical device creation failed with error code: {}\n", (int)Result);
+            goto destroy_instance;
         }
     }
 
@@ -233,8 +326,13 @@ int main()
 
     PrintShader();
 
+destroy_device:
+    vkDestroyDevice(Device, nullptr);
 
+
+destroy_instance:
     vkDestroyInstance(Instance, nullptr);
     std::print("Done!\n");
+
     return 0;
 }
