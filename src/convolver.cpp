@@ -8,7 +8,7 @@
 #include <ranges>
 
 
-const char Shader[] = {
+const char ConvolverShaderSource[] = {
 #embed "convolver.cs.spirv"
 };
 
@@ -26,8 +26,8 @@ void PrintShader()
 
     int i = 0;
     std::vector<char> Line;
-    const int LastIndex = sizeof(Shader) - 1;
-    for (const char Symbol : Shader)
+    const int LastIndex = sizeof(ConvolverShaderSource) - 1;
+    for (const char Symbol : ConvolverShaderSource)
     {
         if (i % 4 == 0)
         {
@@ -84,6 +84,25 @@ struct CandidateDeviceInfo
     bool HasAnyCompute;
     bool HasDeviceLocalHostVisible;
 };
+
+
+#define TEARDOWN_FROM_INSTANCE() \
+    vkDestroyInstance(Instance, nullptr);
+
+#define TEARDOWN_FROM_DEVICE() \
+    vkDestroyDevice(Device, nullptr); \
+    TEARDOWN_FROM_INSTANCE()
+
+#define TEARDOWN_FROM_PIPELINE() \
+    vkDestroyPipeline(Device, ConvolverPipeline, nullptr); \
+    TEARDOWN_FROM_DEVICE()
+
+#define TEARDOWN_FROM_COMMAND_POOL() \
+    vkDestroyCommandPool(Device, CommandPool, nullptr); \
+    TEARDOWN_FROM_PIPELINE()
+
+
+#define TEARDOWN_FROM_NOMINAL TEARDOWN_FROM_COMMAND_POOL
 
 
 int main()
@@ -153,7 +172,8 @@ int main()
         if (Result != VK_SUCCESS)
         {
             std::print("Instance creation failed with error code: {}\n", (int)Result);
-            return 0;
+            TEARDOWN_FROM_INSTANCE();
+            return 1;
         }
     }
 
@@ -260,7 +280,8 @@ int main()
         if (BestDevice == -1)
         {
             std::print("No suitable GPU available.\n");
-            goto destroy_instance;
+            TEARDOWN_FROM_INSTANCE();
+            return 1;
         }
 
         PhysicalDevice = IdentifiedDevices[BestDevice].Device;
@@ -317,22 +338,132 @@ int main()
         if (Result != VK_SUCCESS)
         {
             std::print("Logical device creation failed with error code: {}\n", (int)Result);
-            goto destroy_instance;
+            TEARDOWN_FROM_INSTANCE();
+            return 1;
+        }
+    }
+
+    VkPipeline ConvolverPipeline;
+    {
+        PrintShader();
+
+        VkShaderModule ShaderModule;
+        {
+            static_assert(sizeof(ConvolverShaderSource) % sizeof(uint32_t) == 0);
+            VkShaderModuleCreateInfo CreateInfo = {
+                .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .codeSize = sizeof(ConvolverShaderSource),
+                .pCode = (const uint32_t*)ConvolverShaderSource
+            };
+            VkResult Result = vkCreateShaderModule(Device, &CreateInfo, nullptr, &ShaderModule);
+            if (Result != VK_SUCCESS)
+            {
+                std::print("Shader module creation failed with error code: {}\n", (int)Result);
+                TEARDOWN_FROM_DEVICE();
+                return 1;
+            }
+        }
+
+        VkPipelineLayout PipelineLayout;
+        {
+            VkPipelineLayoutCreateInfo CreateInfo = {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .setLayoutCount = 0,
+                .pSetLayouts = nullptr,
+                .pushConstantRangeCount = 0,
+                .pPushConstantRanges = nullptr
+            };
+            VkResult Result = vkCreatePipelineLayout(Device, &CreateInfo, nullptr, &PipelineLayout);
+            if (Result != VK_SUCCESS)
+            {
+                std::print("Pipeline layout creation failed with error code: {}\n", (int)Result);
+                vkDestroyShaderModule(Device, ShaderModule, nullptr);
+                TEARDOWN_FROM_DEVICE();
+                return 1;
+            }
+        }
+
+        {
+            VkComputePipelineCreateInfo CreateInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .stage =
+                {
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                    .module = ShaderModule,
+                    .pName = "main",
+                    .pSpecializationInfo = nullptr
+                },
+                .layout = PipelineLayout,
+                .basePipelineHandle = VK_NULL_HANDLE,
+                .basePipelineIndex = 0
+            };
+            VkResult Result = vkCreateComputePipelines(Device, VK_NULL_HANDLE, 1, &CreateInfo, nullptr, &ConvolverPipeline);
+            vkDestroyShaderModule(Device, ShaderModule, nullptr);
+            vkDestroyPipelineLayout(Device, PipelineLayout, nullptr);
+            if (Result != VK_SUCCESS)
+            {
+                std::print("Shader pipeline creation failed with error code: {}\n", (int)Result);
+                TEARDOWN_FROM_DEVICE();
+                return 1;
+            }
         }
     }
 
 
+    VkCommandPool CommandPool;
+    {
+        VkCommandPoolCreateInfo CommandPoolCreateInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = QueueFamilyIndex
+        };
+        VkResult Result = vkCreateCommandPool(Device, &CommandPoolCreateInfo, nullptr, &CommandPool);
+        if (Result != VK_SUCCESS)
+        {
+            std::print("Command pool creation failed with error code: {}\n", (int)Result);
+            TEARDOWN_FROM_PIPELINE();
+            return 1;
+        }
+    }
+
+    VkCommandBuffer CommandBuffers[2];
+    {
+        VkCommandBufferAllocateInfo CommandBufferAllocateInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .commandPool = CommandPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 2
+        };
+        VkResult Result = vkAllocateCommandBuffers(Device, &CommandBufferAllocateInfo, CommandBuffers);
+        if (Result != VK_SUCCESS)
+        {
+            std::print("Command buffer allocation failed with error code: {}\n", (int)Result);
+            TEARDOWN_FROM_COMMAND_POOL();
+            return 1;
+        }
+    }
 
 
-    PrintShader();
-
-destroy_device:
-    vkDestroyDevice(Device, nullptr);
+    uint64_t FrameNumber = 0;
 
 
-destroy_instance:
-    vkDestroyInstance(Instance, nullptr);
+
+
+    TEARDOWN_FROM_NOMINAL();
     std::print("Done!\n");
-
     return 0;
 }
