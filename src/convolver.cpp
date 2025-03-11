@@ -49,7 +49,6 @@ void PrintShader()
         if (i % 16 == 15 || i == LastIndex)
         {
             std::print("  ");
-            std::print("{}  ", Line.size());
             for (char Text : Line)
             {
                 if (Text == '\0')
@@ -287,7 +286,7 @@ int main()
         PhysicalDevice = IdentifiedDevices[BestDevice].Device;
         QueueFamilyIndex = IdentifiedDevices[BestDevice].Queue;
 
-        std::print("Available Instance Layers:\n");
+        std::print("Available Physical Devices:\n");
         for (uint32_t DeviceIndex = 0; DeviceIndex < IdentifiedDevices.size(); ++DeviceIndex)
         {
             CandidateDeviceInfo DeviceInfo = IdentifiedDevices[DeviceIndex];
