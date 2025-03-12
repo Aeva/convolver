@@ -342,6 +342,9 @@ int main()
         }
     }
 
+    VkQueue Queue;
+    vkGetDeviceQueue(Device, QueueFamilyIndex, 0, &Queue);
+
     VkPipeline ConvolverPipeline;
     {
         PrintShader();
@@ -456,10 +459,62 @@ int main()
         }
     }
 
+    for (VkCommandBuffer& CommandBuffer : CommandBuffers)
+    {
+        VkCommandBufferBeginInfo BeginInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .pInheritanceInfo = nullptr
+        };
+        vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
+        vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
+        vkCmdDispatch(CommandBuffer, 1, 1, 1);
+        vkEndCommandBuffer(CommandBuffer);
+    }
 
-    uint64_t FrameNumber = 0;
+    VkFence FrameFence;
+    {
+        VkFenceCreateInfo CreateInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_FENCE_CREATE_SIGNALED_BIT
+        };
+        vkCreateFence(Device, &CreateInfo, nullptr, &FrameFence);
+    }
 
+    for (uint64_t FrameNumber = 0; FrameNumber < 64; ++FrameNumber)
+    {
+        vkResetFences(Device, 1, &FrameFence);
+        VkCommandBuffer& CommandBuffer = CommandBuffers[FrameNumber % 2];
+        VkSubmitInfo SubmitInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = nullptr,
+            .pWaitDstStageMask = 0,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &CommandBuffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = nullptr
+        };
+        vkQueueSubmit(Queue, 1, &SubmitInfo, FrameFence);
 
+        VkResult Result = VK_TIMEOUT;
+        while (Result == VK_TIMEOUT)
+        {
+            Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
+        }
+        if (Result != VK_SUCCESS)
+        {
+            break;
+        }
+    }
+
+    vkDestroyFence(Device, FrameFence, nullptr);
 
 
     TEARDOWN_FROM_NOMINAL();
