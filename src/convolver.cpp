@@ -185,6 +185,7 @@ int main()
     VkPhysicalDevice PhysicalDevice;
     uint32_t QueueFamilyIndex = -1;
     uint32_t HeapIndex = 0;
+    uint32_t MemoryTypeIndex = 0;
     {
         uint32_t PhysicalDeviceCount = 0;
         std::vector<VkPhysicalDevice> AvailableDevices;
@@ -314,6 +315,22 @@ int main()
         {
             VkPhysicalDeviceMemoryProperties MemoryProperties;
             vkGetPhysicalDeviceMemoryProperties(PhysicalDevice, &MemoryProperties);
+
+            const VkMemoryPropertyFlags TargetFlags = \
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+            MemoryTypeIndex = 0;
+            for (VkMemoryType MemoryType : MemoryProperties.memoryTypes | std::views::take(MemoryProperties.memoryTypeCount))
+            {
+                if (MemoryType.propertyFlags == TargetFlags)
+                {
+                    break;
+                }
+                ++MemoryTypeIndex;
+            }
+
             HeapIndex = 0;
             for (VkMemoryHeap MemoryHeap : MemoryProperties.memoryHeaps | std::views::take(MemoryProperties.memoryHeapCount))
             {
@@ -442,7 +459,6 @@ int main()
         }
     }
 
-
     VkCommandPool CommandPool;
     {
         VkCommandPoolCreateInfo CommandPoolCreateInfo =
@@ -495,6 +511,24 @@ int main()
         vkEndCommandBuffer(CommandBuffer);
     }
 
+    VkDeviceMemory SomeMemory;
+    {
+        VkMemoryAllocateInfo AllocateInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .allocationSize = 64,
+            .memoryTypeIndex = MemoryTypeIndex
+        };
+        VkResult Result = vkAllocateMemory(Device, &AllocateInfo, nullptr, &SomeMemory);
+        if (Result != VK_SUCCESS)
+        {
+            std::print("Allocation failed with error code: {}\n", (int)Result);
+            TEARDOWN_FROM_DEVICE();
+            return 1;
+        }
+    }
+
     std::print("\nNow entering \"the cool zone\" (hot loop)...\n");
 
     VkFence FrameFence;
@@ -536,6 +570,8 @@ int main()
             break;
         }
     }
+
+    vkFreeMemory(Device, SomeMemory, nullptr);
 
     vkDestroyFence(Device, FrameFence, nullptr);
 
