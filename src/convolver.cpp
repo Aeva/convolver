@@ -48,6 +48,12 @@ void PrintShader()
 
         if (i % 16 == 15 || i == LastIndex)
         {
+            int Remainder = 16 - Line.size();
+            while (Remainder > 0)
+            {
+                std::print("{}             {}", FG(8), ANSI_RESET);
+                Remainder -= 4;
+            }
             std::print("  ");
             for (char Text : Line)
             {
@@ -70,7 +76,7 @@ void PrintShader()
         ++i;
     }
     std::print("{}\n", ANSI_RESET);
-    std::print("It does nothing :3\n");
+    std::print("I made it for you! :3\n");
 }
 
 
@@ -178,6 +184,7 @@ int main()
 
     VkPhysicalDevice PhysicalDevice;
     uint32_t QueueFamilyIndex = -1;
+    uint32_t HeapIndex = 0;
     {
         uint32_t PhysicalDeviceCount = 0;
         std::vector<VkPhysicalDevice> AvailableDevices;
@@ -301,6 +308,20 @@ int main()
             else if (DeviceInfo.Score <= 1)
             {
                 std::print(" {}- (Rejected) {}{}\n", FG(240), DeviceInfo.Name, ANSI_RESET);
+            }
+        }
+
+        {
+            VkPhysicalDeviceMemoryProperties MemoryProperties;
+            vkGetPhysicalDeviceMemoryProperties(PhysicalDevice, &MemoryProperties);
+            HeapIndex = 0;
+            for (VkMemoryHeap MemoryHeap : MemoryProperties.memoryHeaps | std::views::take(MemoryProperties.memoryHeapCount))
+            {
+                if (HAS_FLAG(MemoryHeap.flags, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+                {
+                    break;
+                }
+                ++HeapIndex;
             }
         }
     }
@@ -473,6 +494,8 @@ int main()
         vkCmdDispatch(CommandBuffer, 1, 1, 1);
         vkEndCommandBuffer(CommandBuffer);
     }
+
+    std::print("\nNow entering \"the cool zone\" (hot loop)...\n");
 
     VkFence FrameFence;
     {
