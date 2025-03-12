@@ -529,6 +529,11 @@ int main()
         }
     }
 
+    void* SomeMappedMemory = nullptr;
+    {
+        VkResult Result = vkMapMemory(Device, SomeMemory, 0, 64, 0, &SomeMappedMemory);
+    }
+
     std::print("\nNow entering \"the cool zone\" (hot loop)...\n");
 
     VkFence FrameFence;
@@ -571,6 +576,7 @@ int main()
         }
     }
 
+    vkUnmapMemory(Device, SomeMemory);
     vkFreeMemory(Device, SomeMemory, nullptr);
 
     vkDestroyFence(Device, FrameFence, nullptr);
