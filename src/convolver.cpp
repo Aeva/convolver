@@ -357,10 +357,18 @@ int main()
             .pQueuePriorities = Priority,
         };
 
+        VkPhysicalDeviceVulkan12Features PhysicalDeviceVulkan12Features = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            .pNext = nullptr,
+            .shaderFloat16 = VK_TRUE,
+            .shaderStorageBufferArrayNonUniformIndexing = VK_TRUE,
+            .bufferDeviceAddress = VK_TRUE
+        };
+
         VkDeviceCreateInfo DeviceCreateInfo =
         {
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = nullptr,
+            .pNext = &PhysicalDeviceVulkan12Features,
             .flags = 0,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &QueueCreateInfo,
@@ -384,6 +392,7 @@ int main()
     vkGetDeviceQueue(Device, QueueFamilyIndex, 0, &Queue);
 
     VkPipeline ConvolverPipeline;
+    VkPipelineLayout ConvolverPipelineLayout;
     {
         PrintShader();
 
@@ -406,7 +415,13 @@ int main()
             }
         }
 
-        VkPipelineLayout PipelineLayout;
+        VkPushConstantRange PushConstantRange = {
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = 8
+        };
+
+        //VkPipelineLayout PipelineLayout;
         {
             VkPipelineLayoutCreateInfo CreateInfo = {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -414,10 +429,10 @@ int main()
                 .flags = 0,
                 .setLayoutCount = 0,
                 .pSetLayouts = nullptr,
-                .pushConstantRangeCount = 0,
-                .pPushConstantRanges = nullptr
+                .pushConstantRangeCount = 1,
+                .pPushConstantRanges = &PushConstantRange
             };
-            VkResult Result = vkCreatePipelineLayout(Device, &CreateInfo, nullptr, &PipelineLayout);
+            VkResult Result = vkCreatePipelineLayout(Device, &CreateInfo, nullptr, &ConvolverPipelineLayout);
             if (Result != VK_SUCCESS)
             {
                 std::print("Pipeline layout creation failed with error code: {}\n", (int)Result);
@@ -443,13 +458,13 @@ int main()
                     .pName = "main",
                     .pSpecializationInfo = nullptr
                 },
-                .layout = PipelineLayout,
+                .layout = ConvolverPipelineLayout,
                 .basePipelineHandle = VK_NULL_HANDLE,
                 .basePipelineIndex = 0
             };
             VkResult Result = vkCreateComputePipelines(Device, VK_NULL_HANDLE, 1, &CreateInfo, nullptr, &ConvolverPipeline);
             vkDestroyShaderModule(Device, ShaderModule, nullptr);
-            vkDestroyPipelineLayout(Device, PipelineLayout, nullptr);
+            //vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
             if (Result != VK_SUCCESS)
             {
                 std::print("Shader pipeline creation failed with error code: {}\n", (int)Result);
@@ -496,27 +511,20 @@ int main()
         }
     }
 
-    for (VkCommandBuffer& CommandBuffer : CommandBuffers)
-    {
-        VkCommandBufferBeginInfo BeginInfo =
-        {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .pInheritanceInfo = nullptr
-        };
-        vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
-        vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
-        vkCmdDispatch(CommandBuffer, 1, 1, 1);
-        vkEndCommandBuffer(CommandBuffer);
-    }
-
     VkDeviceMemory SomeMemory;
     {
+        VkMemoryAllocateFlagsInfo AllocateFlagsInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+            .pNext = nullptr,
+            .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
+            .deviceMask = 0
+        };
+
         VkMemoryAllocateInfo AllocateInfo =
         {
             .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = nullptr,
+            .pNext = &AllocateFlagsInfo,
             .allocationSize = 64,
             .memoryTypeIndex = MemoryTypeIndex
         };
@@ -532,6 +540,56 @@ int main()
     void* SomeMappedMemory = nullptr;
     {
         VkResult Result = vkMapMemory(Device, SomeMemory, 0, 64, 0, &SomeMappedMemory);
+    }
+
+    VkBuffer SomeBuffer;
+    {
+        VkBufferCreateInfo CreateInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .size = 64,
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &QueueFamilyIndex
+        };
+        VkResult Result = vkCreateBuffer(Device, &CreateInfo, nullptr, &SomeBuffer);
+        Result = vkBindBufferMemory(Device, SomeBuffer, SomeMemory, 0);
+    }
+
+    VkDeviceAddress SomeDeviceaddress;
+    {
+        VkBufferDeviceAddressInfo AddressInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .pNext = nullptr,
+            .buffer = SomeBuffer
+        };
+        SomeDeviceaddress = vkGetBufferDeviceAddress(Device, &AddressInfo);
+    }
+
+    {
+        uint32_t* Fnord = (uint32_t*)SomeMappedMemory;
+        Fnord[0] = 1;
+        Fnord[1] = 1;
+    }
+
+    for (VkCommandBuffer& CommandBuffer : CommandBuffers)
+    {
+        VkCommandBufferBeginInfo BeginInfo =
+        {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .pInheritanceInfo = nullptr
+        };
+        vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
+        vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
+        vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 8, &SomeDeviceaddress);
+        vkCmdDispatch(CommandBuffer, 1, 1, 1);
+        vkEndCommandBuffer(CommandBuffer);
     }
 
     std::print("\nNow entering \"the cool zone\" (hot loop)...\n");
@@ -570,12 +628,18 @@ int main()
         {
             Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
         }
+        {
+            uint32_t* Fnord = (uint32_t*)SomeMappedMemory;
+            std::print("Frame {}: {} {}\n", FrameNumber, Fnord[0], Fnord[1]);
+        }
         if (Result != VK_SUCCESS)
         {
             break;
         }
     }
 
+    vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
+    vkDestroyBuffer(Device, SomeBuffer, nullptr);
     vkUnmapMemory(Device, SomeMemory);
     vkFreeMemory(Device, SomeMemory, nullptr);
 
