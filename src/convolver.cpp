@@ -6,7 +6,9 @@
 #include <set>
 #include <string>
 #include <ranges>
+#include <chrono>
 
+#define BENCHMARKING 1
 
 const char ConvolverShaderSource[] = {
 #embed "convolver.cs.spirv"
@@ -605,7 +607,14 @@ int main()
         vkCreateFence(Device, &CreateInfo, nullptr, &FrameFence);
     }
 
-    for (uint64_t FrameNumber = 0; FrameNumber < 64; ++FrameNumber)
+#if BENCHMARKING
+    const auto StartTime = std::chrono::steady_clock::now();
+    const uint64_t FrameCount = 10000;
+#else
+    const uint64_t FrameCount = 64;
+#endif
+
+    for (uint64_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
     {
         vkResetFences(Device, 1, &FrameFence);
         VkCommandBuffer& CommandBuffer = CommandBuffers[FrameNumber % 2];
@@ -628,15 +637,25 @@ int main()
         {
             Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
         }
+#if !BENCHMARKING
         {
             uint32_t* Fnord = (uint32_t*)SomeMappedMemory;
             std::print("Frame {}: {} {}\n", FrameNumber, Fnord[0], Fnord[1]);
         }
+#endif
         if (Result != VK_SUCCESS)
         {
             break;
         }
     }
+
+#if BENCHMARKING
+    const auto StopTime = std::chrono::steady_clock::now();
+    const std::chrono::duration<double, std::milli> DeltaTime = StopTime - StartTime;
+    double AverageTime = DeltaTime.count() / double(FrameCount);
+    std::print("Iterations: {}\n", FrameCount);
+    std::print("Average Time: {} milliseconds\n", AverageTime);
+#endif
 
     vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
     vkDestroyBuffer(Device, SomeBuffer, nullptr);
