@@ -1,4 +1,7 @@
 
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+
 #include <vulkan/vulkan.h>
 #include <print>
 #include <format>
@@ -8,7 +11,9 @@
 #include <ranges>
 #include <chrono>
 
-#define BENCHMARKING 1
+#define BENCHMARKING 0
+
+#define SOUND_CHECK 1
 
 const char ConvolverShaderSource[] = {
 #embed "convolver.cs.spirv"
@@ -112,8 +117,30 @@ struct CandidateDeviceInfo
 #define TEARDOWN_FROM_NOMINAL TEARDOWN_FROM_COMMAND_POOL
 
 
-int main()
+int main(int argc, char *argv[])
 {
+    if (!SDL_Init(SDL_INIT_AUDIO)) {
+        SDL_Log("Could not initialize SDL: %s", SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+    SDL_AudioStream* Stream = nullptr;
+    {
+        SDL_AudioSpec AudioSpec = {
+            .format = SDL_AUDIO_F32,
+            .channels = 1,
+            .freq = 22050,
+        };
+
+        Stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &AudioSpec, nullptr, nullptr);
+        if (!Stream)
+        {
+            SDL_Log("Could not create audio stream: %s", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+        SDL_ResumeAudioStreamDevice(Stream);
+    }
+
     std::set<std::string> RequestedLayers;
     {
         RequestedLayers.emplace("VK_LAYER_KHRONOS_validation");
@@ -657,6 +684,50 @@ int main()
     std::print("Average Time: {} milliseconds\n", AverageTime);
 #endif
 
+#if SOUND_CHECK
+    {
+        float Samples[22050];
+        const int LastSample = 22050 - 1;
+        const int Attack = int(float(LastSample) * 0.25);
+        const int Decay = int(float(LastSample) * 0.5);
+        const int DecayRange = LastSample - Decay;
+
+        int Cursor = 0;
+
+        for (int Index = 0; Index < SDL_arraysize(Samples); Index++) {
+            const float Phase = (float)Cursor * 440.0f / 22050.0f;
+            float Amplitude = 0.5f;
+
+            if (Index <= Attack)
+            {
+                float Alpha = float(Index) / float(Attack);
+                Amplitude *= Alpha;
+            }
+            else if (Index >= Decay)
+            {
+                float Alpha = 1.0 - (float(Index - Decay) / float(DecayRange));
+                Amplitude *= Alpha * Alpha;
+            }
+
+            Samples[Index] = SDL_sinf(Phase * 2.0f * SDL_PI_F) * Amplitude;
+            Cursor = (Cursor + 1) % 22050;
+        }
+
+        SDL_PutAudioStreamData(Stream, Samples, sizeof(Samples));
+
+        SDL_FlushAudioStream(Stream);
+
+        SDL_Event Event;
+        int RemainingBytes = 1;
+        do
+        {
+            RemainingBytes = SDL_GetAudioStreamQueued(Stream);
+            SDL_PollEvent(&Event);
+        }
+        while (RemainingBytes > 0);
+    }
+#endif
+
     vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
     vkDestroyBuffer(Device, SomeBuffer, nullptr);
     vkUnmapMemory(Device, SomeMemory);
@@ -666,6 +737,9 @@ int main()
 
 
     TEARDOWN_FROM_NOMINAL();
+
+    SDL_DestroyAudioStream(Stream);
+
     std::print("Done!\n");
     return 0;
 }
