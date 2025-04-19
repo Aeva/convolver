@@ -1,6 +1,7 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include <SDL3/SDL_events.h>
 
 #include <vulkan/vulkan.h>
 #include <print>
@@ -119,17 +120,18 @@ struct CandidateDeviceInfo
 
 int main(int argc, char *argv[])
 {
-    if (!SDL_Init(SDL_INIT_AUDIO)) {
+    if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
         SDL_Log("Could not initialize SDL: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
+    const int SampleRate = 22050;
     SDL_AudioStream* Stream = nullptr;
     {
         SDL_AudioSpec AudioSpec = {
             .format = SDL_AUDIO_F32,
             .channels = 1,
-            .freq = 22050,
+            .freq = SampleRate,
         };
 
         Stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &AudioSpec, nullptr, nullptr);
@@ -686,16 +688,21 @@ int main(int argc, char *argv[])
 
 #if SOUND_CHECK
     {
-        float Samples[22050];
-        const int LastSample = 22050 - 1;
+        const float TimeSpan = 2.0f;
+        const int SampleCount = int(float(SampleRate) * TimeSpan);
+
+        std::vector<float> Samples;
+        Samples.resize(SampleCount);
+
+        const int LastSample = SampleCount - 1;
         const int Attack = int(float(LastSample) * 0.25);
         const int Decay = int(float(LastSample) * 0.5);
         const int DecayRange = LastSample - Decay;
 
         int Cursor = 0;
 
-        for (int Index = 0; Index < SDL_arraysize(Samples); Index++) {
-            const float Phase = (float)Cursor * 440.0f / 22050.0f;
+        for (int Index = 0; Index < Samples.size(); Index++) {
+            const float Phase = (float)Cursor * 440.0f / SampleRate;
             float Amplitude = 0.5f;
 
             if (Index <= Attack)
@@ -710,19 +717,24 @@ int main(int argc, char *argv[])
             }
 
             Samples[Index] = SDL_sinf(Phase * 2.0f * SDL_PI_F) * Amplitude;
-            Cursor = (Cursor + 1) % 22050;
+            Cursor = (Cursor + 1) % SampleCount;
         }
 
-        SDL_PutAudioStreamData(Stream, Samples, sizeof(Samples));
-
-        SDL_FlushAudioStream(Stream);
+        SDL_PutAudioStreamData(Stream, Samples.data(), sizeof(float) * Samples.size());
 
         SDL_Event Event;
         int RemainingBytes = 1;
         do
         {
+            //SDL_PollEvent(&Event);
+            if (SDL_WaitEventTimeout(&Event, TimeSpan * 1000))
+            {
+                if (Event.type == SDL_EVENT_QUIT)
+                {
+                    break;
+                }
+            }
             RemainingBytes = SDL_GetAudioStreamQueued(Stream);
-            SDL_PollEvent(&Event);
         }
         while (RemainingBytes > 0);
     }
