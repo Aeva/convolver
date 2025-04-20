@@ -362,6 +362,7 @@ int main(int argc, char *argv[])
         SDL_ResumeAudioStreamDevice(OutStream);
 
         WaveA = WaveData(OutSpec, "generations_stereo.wav");
+        //WaveA = WaveData(OutSpec, "steel4.wav");
         WaveB = WaveData(OutSpec, "bell.wav");
     }
 
@@ -369,7 +370,11 @@ int main(int argc, char *argv[])
     {
         return SDL_APP_FAILURE;
     }
-    std::reverse(WaveB.Samples.begin(), WaveB.Samples.end());
+    else
+    {
+        std::reverse(WaveB.Samples.begin(), WaveB.Samples.end());
+        WaveA.Samples.resize(WaveA.Samples.size() + WaveB.Samples.size(), 0.0f);
+    }
 
     std::set<std::string> RequestedLayers;
     {
@@ -788,7 +793,7 @@ int main(int argc, char *argv[])
     // This determines the latency vs throughput tradeoff.
 
     const int32_t GroupSize = 32;
-    const size_t MaxSizeC = BufferA->ElementCount + BufferB->ElementCount - 1;
+    const size_t MaxSizeC = BufferA->ElementCount;
 
 #if REALTIME_MODE
     // Lowest latency

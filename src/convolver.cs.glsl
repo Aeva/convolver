@@ -37,15 +37,20 @@ layout(std430, push_constant) uniform PushConstantsBlock
 layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
+    // Application must guarantee the following:
+    //  - SizeA is always greater than SizeB, as BufferA must be padded with SizeB zeros.
+    //  - SizeA is always greater than or equal to SizeC
+    //  - Stop <= SizeA
+    //  - LocalIndex <= SizeC
     const int Stop = Start + Range;
     const int LocalIndex = int(gl_GlobalInvocationID.x);
     const int Sample = Start + LocalIndex;
-    if (Sample < Stop && LocalIndex < SizeC)
+    if (Sample < Stop)
     {
         float Acc = 0.0f;
-        const int Iterations = min(min(SizeA, SizeB), Sample + 1);
-        const int StartA = max(0, Sample + 1 - Iterations);
-        const int StartB = SizeB - Iterations;
+        const int Iterations = min(SizeB, Sample + 1);
+        const int StartA = Sample + 1 - Iterations; // Possible range is 0 to SizeA - Size B, inclusive.
+        const int StartB = SizeB - Iterations; // Possible range is 0 to SizeB - 1, inclusive.
         for (int i = 0; i < Iterations; ++i)
         {
             const float SampleA = BufferA.Data[StartA + i];
