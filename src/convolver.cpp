@@ -820,15 +820,23 @@ int main(int argc, char *argv[])
 
     // This determines the latency vs throughput tradeoff.
 
-    const int32_t TargetSamplesPerFrame = SampleRate; //(float(SampleRate) / 1000.0f * 10.0f);
-
     const int32_t GroupSize = 32;
-    const int32_t GroupsPerFrame = DIV_UP(TargetSamplesPerFrame, 32);
 
-    std::print("{}, {}\n", TargetSamplesPerFrame, GroupsPerFrame);
+#if 0
+    // Lowest latency
+    const int32_t TargetSamplesPerFrame = std::max(GroupSize * 16, int32_t(float(SampleRate) / 1000.0f * 10.0f));
+    const int32_t GroupsPerFrame = DIV_UP(TargetSamplesPerFrame, GroupSize);
+#else
+    // Lowest total time
+    const int32_t GroupsPerFrame = std::min(int32_t(DIV_UP(BufferC->ElementCount, GroupSize)), int32_t(65535));
+#endif
 
     const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
     const int32_t FrameCount = uint32_t(DIV_UP(BufferC->ElementCount, SamplesPerFrame));
+
+    std::print("Frames span: {} milliseconds\n", float(SamplesPerFrame) / float(SampleRate) * 1000.0f);
+    std::print("Samples per frame: {}\n", SamplesPerFrame);
+    std::print("Groups per frame: {}\n", GroupsPerFrame);
 
 #if 1
     for (int32_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
@@ -912,7 +920,7 @@ int main(int argc, char *argv[])
     double AverageTime = DeltaTime.count() / double(FrameCount);
     std::print("Iterations: {}\n", FrameCount);
     std::print("Average Time: {} milliseconds\n", AverageTime);
-    std::print("  Total Time: {} milliseconds\n", DeltaTime.count());
+    std::print("  Total Time: {} seconds\n", DeltaTime.count() / 1000.f);
 #elif 0
     for (int i = 0; i < BufferC->ElementCount; ++i)
     {
