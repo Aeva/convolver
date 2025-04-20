@@ -272,7 +272,6 @@ struct PushConstantsUpload
     int32_t SizeC;
     int32_t Start;
     int32_t Range;
-    float Gain;
 };
 
 
@@ -379,8 +378,9 @@ int main(int argc, char *argv[])
         }
         SDL_ResumeAudioStreamDevice(OutStream);
 
-        WaveA = WaveData(OutSpec, "generations_stereo.wav");
-        WaveB = WaveData(OutSpec, "bell.wav");
+        //WaveA = WaveData(OutSpec, "generations_stereo.wav");
+        WaveA = WaveData(OutSpec, "strange_birds.wav");
+        WaveB = WaveData(OutSpec, "chest.wav");
     }
 
     if (WaveA.Samples.size() == 0 || WaveB.Samples.size() == 0)
@@ -906,8 +906,7 @@ int main(int argc, char *argv[])
                 .SizeB = int32_t(BufferB->ElementCount),
                 .SizeC = int32_t(BufferC->ElementCount),
                 .Start = Start,
-                .Range = Range,
-                .Gain = 1.0f
+                .Range = Range
             };
 
             VkCommandBufferBeginInfo BeginInfo =

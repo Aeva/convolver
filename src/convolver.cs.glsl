@@ -18,8 +18,7 @@ layout(std430, push_constant) uniform PushConstantsBlock
     int SizeB;              // + 4 = 32
     int SizeC;              // + 4 = 36
     int Start;              // + 4 = 40
-    int Range;              // + 4 = 44
-    float Gain;             // + 4 = 48 bytes
+    int Range;              // + 4 = 44 bytes
 };
 
 
@@ -47,6 +46,6 @@ void main()
             Acc += SampleA * SampleB;
         }
 
-        BufferC.Data[LocalIndex] = Acc * Gain;
+        BufferC.Data[LocalIndex] = Acc;
     }
 }
