@@ -14,7 +14,7 @@
 
 #define BENCHMARKING 0
 
-#define SOUND_CHECK 1
+#define SOUND_CHECK 0
 
 const char ConvolverShaderSource[] = {
 #embed "convolver.cs.spirv"
@@ -116,6 +116,132 @@ struct CandidateDeviceInfo
 
 
 #define TEARDOWN_FROM_NOMINAL TEARDOWN_FROM_COMMAND_POOL
+
+
+template <typename ElementType>
+struct SharedMemory
+{
+    VkDevice Device;
+    VkDeviceMemory DeviceMemory;
+    VkBuffer Buffer;
+    VkDeviceAddress DeviceAddress;
+    ElementType* Mapped = nullptr;
+    int InitLevel = 0;
+    bool IsValid = false;
+
+    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, size_t ElementCount)
+        : Device(InDevice)
+    {
+        const size_t AllocationSize = sizeof(ElementType) * ElementCount;
+        VkResult Result = VK_SUCCESS;
+        {
+            VkMemoryAllocateFlagsInfo AllocateFlagsInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+                .pNext = nullptr,
+                .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
+                .deviceMask = 0
+            };
+
+            VkMemoryAllocateInfo AllocateInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                .pNext = &AllocateFlagsInfo,
+                .allocationSize = AllocationSize,
+                .memoryTypeIndex = MemoryTypeIndex
+            };
+            Result = vkAllocateMemory(Device, &AllocateInfo, nullptr, &DeviceMemory);
+            if (Result != VK_SUCCESS)
+            {
+                std::print("Allocation failed with error code: {}\n", (int)Result);
+            }
+            else
+            {
+                ++InitLevel;
+            }
+        }
+        if (Result == VK_SUCCESS)
+        {
+            void* VoidStar;
+            Result = vkMapMemory(Device, DeviceMemory, 0, AllocationSize, 0, &VoidStar);
+            Mapped = (ElementType*)VoidStar;
+            if (Result != VK_SUCCESS)
+            {
+                std::print("Memory mapping failed: {}\n", (int)Result);
+            }
+        }
+        if (Result == VK_SUCCESS)
+        {
+            VkBufferCreateInfo CreateInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .size = AllocationSize,
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 1,
+                .pQueueFamilyIndices = &QueueFamilyIndex
+            };
+            Result = vkCreateBuffer(Device, &CreateInfo, nullptr, &Buffer);
+            if (Result != VK_SUCCESS)
+            {
+                std::print("Buffer creation failed: {}\n", (int)Result);
+            }
+            else
+            {
+                ++InitLevel;
+            }
+        }
+        if (Result == VK_SUCCESS)
+        {
+            Result = vkBindBufferMemory(Device, Buffer, DeviceMemory, 0);
+            if (Result != VK_SUCCESS)
+            {
+                std::print("Failed to bind buffer memory: {}\n", (int)Result);
+            }
+        }
+        if (Result == VK_SUCCESS)
+        {
+            VkBufferDeviceAddressInfo AddressInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+                .pNext = nullptr,
+                .buffer = Buffer
+            };
+            DeviceAddress = vkGetBufferDeviceAddress(Device, &AddressInfo);
+            ++InitLevel;
+        }
+        IsValid = (Result == VK_SUCCESS);
+        if (!IsValid)
+        {
+            Free();
+        }
+    }
+
+    void Free()
+    {
+        if (InitLevel >= 1)
+        {
+            vkDestroyBuffer(Device, Buffer, nullptr);
+        }
+        if (InitLevel == 3)
+        {
+            vkUnmapMemory(Device, DeviceMemory);
+        }
+        if (InitLevel >= 2)
+        {
+            vkFreeMemory(Device, DeviceMemory, nullptr);
+        }
+        InitLevel = 0;
+        IsValid = false;
+    }
+
+    ~SharedMemory()
+    {
+        Free();
+    }
+};
 
 
 int main(int argc, char *argv[])
@@ -542,69 +668,16 @@ int main(int argc, char *argv[])
         }
     }
 
-    VkDeviceMemory SomeMemory;
+    SharedMemory<uint32_t>* StagingArea = new SharedMemory<uint32_t>(Device, MemoryTypeIndex, QueueFamilyIndex, 16);
+    if (!StagingArea->IsValid)
     {
-        VkMemoryAllocateFlagsInfo AllocateFlagsInfo =
-        {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
-            .pNext = nullptr,
-            .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
-            .deviceMask = 0
-        };
-
-        VkMemoryAllocateInfo AllocateInfo =
-        {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = &AllocateFlagsInfo,
-            .allocationSize = 64,
-            .memoryTypeIndex = MemoryTypeIndex
-        };
-        VkResult Result = vkAllocateMemory(Device, &AllocateInfo, nullptr, &SomeMemory);
-        if (Result != VK_SUCCESS)
-        {
-            std::print("Allocation failed with error code: {}\n", (int)Result);
-            TEARDOWN_FROM_DEVICE();
-            return 1;
-        }
+        std::print("Failed to allocate `StagingArea`\n");
+        TEARDOWN_FROM_DEVICE();
     }
-
-    void* SomeMappedMemory = nullptr;
+    else
     {
-        VkResult Result = vkMapMemory(Device, SomeMemory, 0, 64, 0, &SomeMappedMemory);
-    }
-
-    VkBuffer SomeBuffer;
-    {
-        VkBufferCreateInfo CreateInfo =
-        {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .size = 64,
-            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 1,
-            .pQueueFamilyIndices = &QueueFamilyIndex
-        };
-        VkResult Result = vkCreateBuffer(Device, &CreateInfo, nullptr, &SomeBuffer);
-        Result = vkBindBufferMemory(Device, SomeBuffer, SomeMemory, 0);
-    }
-
-    VkDeviceAddress SomeDeviceaddress;
-    {
-        VkBufferDeviceAddressInfo AddressInfo =
-        {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-            .pNext = nullptr,
-            .buffer = SomeBuffer
-        };
-        SomeDeviceaddress = vkGetBufferDeviceAddress(Device, &AddressInfo);
-    }
-
-    {
-        uint32_t* Fnord = (uint32_t*)SomeMappedMemory;
-        Fnord[0] = 1;
-        Fnord[1] = 1;
+        StagingArea->Mapped[0] = 1;
+        StagingArea->Mapped[1] = 1;
     }
 
     for (VkCommandBuffer& CommandBuffer : CommandBuffers)
@@ -618,7 +691,7 @@ int main(int argc, char *argv[])
         };
         vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
         vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
-        vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 8, &SomeDeviceaddress);
+        vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 8, &(StagingArea->DeviceAddress));
         vkCmdDispatch(CommandBuffer, 1, 1, 1);
         vkEndCommandBuffer(CommandBuffer);
     }
@@ -668,8 +741,7 @@ int main(int argc, char *argv[])
         }
 #if !BENCHMARKING
         {
-            uint32_t* Fnord = (uint32_t*)SomeMappedMemory;
-            std::print("Frame {}: {} {}\n", FrameNumber, Fnord[0], Fnord[1]);
+            std::print("Frame {}: {} {}\n", FrameNumber, StagingArea->Mapped[0], StagingArea->Mapped[1]);
         }
 #endif
         if (Result != VK_SUCCESS)
@@ -741,9 +813,7 @@ int main(int argc, char *argv[])
 #endif
 
     vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
-    vkDestroyBuffer(Device, SomeBuffer, nullptr);
-    vkUnmapMemory(Device, SomeMemory);
-    vkFreeMemory(Device, SomeMemory, nullptr);
+    delete StagingArea;
 
     vkDestroyFence(Device, FrameFence, nullptr);
 
