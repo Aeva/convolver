@@ -11,6 +11,7 @@
 #include <string>
 #include <ranges>
 #include <chrono>
+#include <algorithm>
 
 #define BENCHMARKING 0
 
@@ -731,37 +732,6 @@ int main(int argc, char *argv[])
         TEARDOWN_FROM_DEVICE();
     }
 
-    for (VkCommandBuffer& CommandBuffer : CommandBuffers)
-    {
-        PushConstantsUpload Upload =
-        {
-            .BufferA = BufferA->DeviceAddress,
-            .BufferB = BufferB->DeviceAddress,
-            .BufferC = BufferC->DeviceAddress,
-            .SizeA = (int)BufferA->ElementCount,
-            .SizeB = (int)BufferB->ElementCount,
-            .SizeC = (int)BufferC->ElementCount,
-            .Start = 0,
-            .Range = (int)BufferC->ElementCount,
-            .Gain = 1.0f
-        };
-
-        uint32_t GroupSize = uint32_t(DIV_UP(BufferC->ElementCount, 32));
-
-        VkCommandBufferBeginInfo BeginInfo =
-        {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .pInheritanceInfo = nullptr
-        };
-        vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
-        vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
-        vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Upload), &Upload);
-        vkCmdDispatch(CommandBuffer, GroupSize, 1, 1);
-        vkEndCommandBuffer(CommandBuffer);
-    }
-
     std::print("\nNow entering \"the cool zone\" (hot loop)...\n");
 
     VkFence FrameFence;
@@ -777,15 +747,56 @@ int main(int argc, char *argv[])
 
 #if BENCHMARKING
     const auto StartTime = std::chrono::steady_clock::now();
-    const uint64_t FrameCount = SizeC;
-#else
-    const uint64_t FrameCount = SizeC;
 #endif
 
-    for (uint64_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
+    // This determines the latency vs throughput tradeoff.
+    const int32_t GroupsPerFrame = 128;
+
+    const int32_t GroupSize = 32;
+    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
+    const int32_t FrameCount = uint32_t(DIV_UP(BufferC->ElementCount, SamplesPerFrame));
+
+    for (int32_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
     {
         vkResetFences(Device, 1, &FrameFence);
         VkCommandBuffer& CommandBuffer = CommandBuffers[FrameNumber % 2];
+
+        int32_t Start = FrameNumber * SamplesPerFrame;
+        int32_t Range = std::min(std::max(int32_t(BufferC->ElementCount) - Start, 0), SamplesPerFrame);
+        int32_t GroupsThisFrame = DIV_UP(Range, GroupSize);
+        if (Range == 0)
+        {
+            break;
+        }
+
+        {
+            PushConstantsUpload Upload =
+            {
+                .BufferA = BufferA->DeviceAddress,
+                .BufferB = BufferB->DeviceAddress,
+                .BufferC = BufferC->DeviceAddress,
+                .SizeA = int32_t(BufferA->ElementCount),
+                .SizeB = int32_t(BufferB->ElementCount),
+                .SizeC = int32_t(BufferC->ElementCount),
+                .Start = Start,
+                .Range = Range,
+                .Gain = 1.0f
+            };
+
+            VkCommandBufferBeginInfo BeginInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .pInheritanceInfo = nullptr
+            };
+            vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
+            vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
+            vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Upload), &Upload);
+            vkCmdDispatch(CommandBuffer, GroupsThisFrame, 1, 1);
+            vkEndCommandBuffer(CommandBuffer);
+        }
+
         VkSubmitInfo SubmitInfo =
         {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -806,12 +817,15 @@ int main(int argc, char *argv[])
             Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
         }
 #if !BENCHMARKING
+        for (int i = 0; i < Range; ++i)
         {
-            std::print("Frame {}: {} \n", FrameNumber, BufferC->Mapped[FrameNumber % SizeC]);
+            int Sample = (FrameNumber * SamplesPerFrame + i) % SizeC;
+            std::print("Frame {}: {} \n", Sample, BufferC->Mapped[Sample]);
         }
 #endif
         if (Result != VK_SUCCESS)
         {
+            std::print("????\n");
             break;
         }
     }
@@ -822,6 +836,7 @@ int main(int argc, char *argv[])
     double AverageTime = DeltaTime.count() / double(FrameCount);
     std::print("Iterations: {}\n", FrameCount);
     std::print("Average Time: {} milliseconds\n", AverageTime);
+    std::print("  Total Time: {} milliseconds\n", DeltaTime.count());
 #endif
 
 #if SOUND_CHECK
