@@ -30,8 +30,9 @@ layout(std430, push_constant) uniform PushConstantsBlock
 layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
-    const int Stop = min(SizeC, Start + Range);
-    const int Sample = Start + int(gl_GlobalInvocationID.x);
+    const int Stop = Start + Range;
+    const int LocalIndex = int(gl_GlobalInvocationID.x);
+    const int Sample = Start + LocalIndex;
     if (Sample < Stop)
     {
         float Acc = 0.0f;
@@ -46,6 +47,6 @@ void main()
             Acc += BufferA.Data[StartA + i] * BufferB.Data[StartB + i];
 #endif
         }
-        BufferC.Data[Sample] = Acc * Gain; // wave sum on Acc if we parallelize the inner loop
+        BufferC.Data[LocalIndex] = Acc * Gain; // wave sum on Acc if we parallelize the inner loop
     }
 }

@@ -13,9 +13,8 @@
 #include <chrono>
 #include <algorithm>
 
-#define BENCHMARKING 1
-
-#define SOUND_CHECK 1
+#define BENCHMARKING 0
+#define REALTIME_MODE 1
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
 
@@ -773,8 +772,6 @@ int main(int argc, char *argv[])
 
     SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveA.Samples);
     SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveB.Samples);
-    size_t SizeC = BufferA->ElementCount + BufferB->ElementCount - 1;
-    SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeC);
 
     if (!BufferA->IsValid)
     {
@@ -787,6 +784,32 @@ int main(int argc, char *argv[])
         std::print("Failed to allocate `BufferB`\n");
         TEARDOWN_FROM_DEVICE();
     }
+
+    // This determines the latency vs throughput tradeoff.
+
+    const int32_t GroupSize = 32;
+    const size_t MaxSizeC = BufferA->ElementCount + BufferB->ElementCount - 1;
+
+#if REALTIME_MODE
+    // Lowest latency
+    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * 10.0f);
+    const int32_t MinGroupsPerFrame = 1;
+    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
+#else
+    // Lowest total time
+    const int32_t MaxGroupsPerFrame = 65535;
+    const int32_t GroupsPerFrame = std::min(int32_t(DIV_UP(MaxSizeC, GroupSize)), MaxGroupsPerFrame);
+#endif
+
+    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
+    const int32_t FrameCount = uint32_t(DIV_UP(MaxSizeC, SamplesPerFrame));
+    const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
+
+    std::print("Frames span: {} milliseconds\n", FrameSpan);
+    std::print("Samples per frame: {}\n", SamplesPerFrame);
+    std::print("Groups per frame: {}\n", GroupsPerFrame);
+
+    SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SamplesPerFrame);
 
     if (BufferC->IsValid)
     {
@@ -818,33 +841,15 @@ int main(int argc, char *argv[])
     const auto StartTime = std::chrono::steady_clock::now();
 #endif
 
-    // This determines the latency vs throughput tradeoff.
-
-    const int32_t GroupSize = 32;
-
-#if 0
-    // Lowest latency
-    const int32_t TargetSamplesPerFrame = std::max(GroupSize * 16, int32_t(float(SampleRate) / 1000.0f * 10.0f));
-    const int32_t GroupsPerFrame = DIV_UP(TargetSamplesPerFrame, GroupSize);
-#else
-    // Lowest total time
-    const int32_t GroupsPerFrame = std::min(int32_t(DIV_UP(BufferC->ElementCount, GroupSize)), int32_t(65535));
-#endif
-
-    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
-    const int32_t FrameCount = uint32_t(DIV_UP(BufferC->ElementCount, SamplesPerFrame));
-
-    std::print("Frames span: {} milliseconds\n", float(SamplesPerFrame) / float(SampleRate) * 1000.0f);
-    std::print("Samples per frame: {}\n", SamplesPerFrame);
-    std::print("Groups per frame: {}\n", GroupsPerFrame);
-
 #if 1
+    bool Shutdown = false;
     for (int32_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
     {
         SDL_Event Event;
         SDL_PollEvent(&Event);
         if (Event.type == SDL_EVENT_QUIT)
         {
+            Shutdown = true;
             break;
         }
 
@@ -852,10 +857,11 @@ int main(int argc, char *argv[])
         VkCommandBuffer& CommandBuffer = CommandBuffers[FrameNumber % 2];
 
         int32_t Start = FrameNumber * SamplesPerFrame;
-        int32_t Range = std::min(std::max(int32_t(BufferC->ElementCount) - Start, 0), SamplesPerFrame);
+        int32_t Range = std::min(std::max(int32_t(MaxSizeC) - Start, 0), SamplesPerFrame);
         int32_t GroupsThisFrame = DIV_UP(Range, GroupSize);
         if (Range == 0)
         {
+            std::print("Ran out of data (frame {}/{}), shutting down hot loop.\n", FrameNumber, FrameCount);
             break;
         }
 
@@ -870,7 +876,7 @@ int main(int argc, char *argv[])
                 .SizeC = int32_t(BufferC->ElementCount),
                 .Start = Start,
                 .Range = Range,
-                .Gain = 1.0f / 100.0f
+                .Gain = 1.0f / 150.0f
             };
 
             VkCommandBufferBeginInfo BeginInfo =
@@ -911,6 +917,9 @@ int main(int argc, char *argv[])
             std::print("????\n");
             break;
         }
+
+        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * Range);
+        //SDL_FlushAudioStream(OutStream);
     }
 #endif
 
@@ -921,18 +930,10 @@ int main(int argc, char *argv[])
     std::print("Iterations: {}\n", FrameCount);
     std::print("Average Time: {} milliseconds\n", AverageTime);
     std::print("  Total Time: {} seconds\n", DeltaTime.count() / 1000.f);
-#elif 0
-    for (int i = 0; i < BufferC->ElementCount; ++i)
-    {
-        std::print("Sample {}: {} \n", i, BufferC->Mapped[i]);
-    }
 #endif
 
-#if SOUND_CHECK
+    if (!Shutdown)
     {
-        std::print("Starting Playback...\n");
-
-        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, BufferC->ByteSize);
         int RemainingBytes = 1;
         do
         {
@@ -948,7 +949,6 @@ int main(int argc, char *argv[])
         }
         while (RemainingBytes > 0);
     }
-#endif
 
     vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
     delete BufferA;
