@@ -923,49 +923,13 @@ int main(int argc, char *argv[])
 #if SOUND_CHECK
     {
         std::print("Starting Playback...\n");
-        /*
-        const float TimeSpan = 2.0f;
-        const int SampleCount = int(float(SampleRate) * TimeSpan);
 
-        std::vector<float> Samples;
-        Samples.resize(SampleCount);
-
-        const int LastSample = SampleCount - 1;
-        const int Attack = int(float(LastSample) * 0.25);
-        const int Decay = int(float(LastSample) * 0.5);
-        const int DecayRange = LastSample - Decay;
-
-        int Cursor = 0;
-
-        for (int Index = 0; Index < Samples.size(); Index++) {
-            const float Phase = (float)Cursor * 440.0f / SampleRate;
-            float Amplitude = 0.5f;
-
-            if (Index <= Attack)
-            {
-                float Alpha = float(Index) / float(Attack);
-                Amplitude *= Alpha;
-            }
-            else if (Index >= Decay)
-            {
-                float Alpha = 1.0 - (float(Index - Decay) / float(DecayRange));
-                Amplitude *= Alpha * Alpha;
-            }
-
-            Samples[Index] = SDL_sinf(Phase * 2.0f * SDL_PI_F) * Amplitude;
-            Cursor = (Cursor + 1) % SampleCount;
-        }
-
-        SDL_PutAudioStreamData(OutStream, Samples.data(), sizeof(float) * Samples.size());
-        */
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, BufferC->ByteSize);
-        const float TimeSpan = 1.0f;
-
         int RemainingBytes = 1;
         do
         {
             SDL_Event Event;
-            if (SDL_WaitEventTimeout(&Event, TimeSpan * 1000))
+            if (SDL_WaitEventTimeout(&Event, 250))
             {
                 if (Event.type == SDL_EVENT_QUIT)
                 {
