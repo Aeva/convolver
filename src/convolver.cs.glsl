@@ -3,17 +3,6 @@
 #extension GL_EXT_buffer_reference2 : require
 
 
-#define ABS_MODE 0
-#define DYNAMIC_GAIN 0
-
-
-#if ABS_MODE
-    #define IR_MUTATOR(Sample) abs(Sample)
-#else
-    #define IR_MUTATOR(Sample) (Sample)
-#endif
-
-
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer SomeBufferRef
 {
     float Data[];
@@ -55,7 +44,7 @@ void main()
         {
             const float SampleA = BufferA.Data[StartA + i];
             const float SampleB = BufferB.Data[StartB + i];
-            Acc += SampleA * IR_MUTATOR(SampleB);
+            Acc += SampleA * SampleB;
         }
 
         BufferC.Data[LocalIndex] = Acc * Gain;

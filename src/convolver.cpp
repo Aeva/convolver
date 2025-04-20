@@ -12,6 +12,7 @@
 #include <ranges>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 
 #define BENCHMARKING 1
 #define REALTIME_MODE 1
@@ -331,6 +332,23 @@ struct WaveData
             std::print("Couldn't load {}: {}\n", FullPath, SDL_GetError());
         }
     }
+
+    void NormalizeImpulseResponse()
+    {
+        float Acc = 0.0f;
+        for (const float& Sample : Samples)
+        {
+            Acc += std::abs(Sample);
+        }
+
+        const float IdealLevel = 0.5;
+        const float Scale = IdealLevel / std::sqrt(Acc); // unscientific, entirely intuition and experimentation
+
+        for (float& Sample : Samples)
+        {
+            Sample *= Scale;
+        }
+    }
 };
 
 
@@ -362,7 +380,6 @@ int main(int argc, char *argv[])
         SDL_ResumeAudioStreamDevice(OutStream);
 
         WaveA = WaveData(OutSpec, "generations_stereo.wav");
-        //WaveA = WaveData(OutSpec, "steel4.wav");
         WaveB = WaveData(OutSpec, "bell.wav");
     }
 
@@ -374,6 +391,7 @@ int main(int argc, char *argv[])
     {
         std::reverse(WaveB.Samples.begin(), WaveB.Samples.end());
         WaveA.Samples.resize(WaveA.Samples.size() + WaveB.Samples.size(), 0.0f);
+        WaveB.NormalizeImpulseResponse();
     }
 
     std::set<std::string> RequestedLayers;
@@ -889,7 +907,7 @@ int main(int argc, char *argv[])
                 .SizeC = int32_t(BufferC->ElementCount),
                 .Start = Start,
                 .Range = Range,
-                .Gain = 1.0f / 150.0f
+                .Gain = 1.0f
             };
 
             VkCommandBufferBeginInfo BeginInfo =
