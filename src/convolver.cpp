@@ -16,6 +16,8 @@
 
 #define SOUND_CHECK 0
 
+#define DIV_UP(X, Y) ((X + Y - 1) / Y)
+
 const char ConvolverShaderSource[] = {
 #embed "convolver.cs.spirv"
 };
@@ -128,11 +130,14 @@ struct SharedMemory
     ElementType* Mapped = nullptr;
     int InitLevel = 0;
     bool IsValid = false;
+    const size_t ElementCount = 0;
+    const size_t ByteSize = 0;
 
-    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, size_t ElementCount)
+    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, size_t InElementCount)
         : Device(InDevice)
+        , ElementCount(InElementCount)
+        , ByteSize(sizeof(ElementType) * ElementCount)
     {
-        const size_t AllocationSize = sizeof(ElementType) * ElementCount;
         VkResult Result = VK_SUCCESS;
         {
             VkMemoryAllocateFlagsInfo AllocateFlagsInfo =
@@ -147,7 +152,7 @@ struct SharedMemory
             {
                 .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
                 .pNext = &AllocateFlagsInfo,
-                .allocationSize = AllocationSize,
+                .allocationSize = ByteSize,
                 .memoryTypeIndex = MemoryTypeIndex
             };
             Result = vkAllocateMemory(Device, &AllocateInfo, nullptr, &DeviceMemory);
@@ -163,7 +168,7 @@ struct SharedMemory
         if (Result == VK_SUCCESS)
         {
             void* VoidStar;
-            Result = vkMapMemory(Device, DeviceMemory, 0, AllocationSize, 0, &VoidStar);
+            Result = vkMapMemory(Device, DeviceMemory, 0, ByteSize, 0, &VoidStar);
             Mapped = (ElementType*)VoidStar;
             if (Result != VK_SUCCESS)
             {
@@ -177,7 +182,7 @@ struct SharedMemory
                 .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                 .pNext = nullptr,
                 .flags = 0,
-                .size = AllocationSize,
+                .size = ByteSize,
                 .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                 .queueFamilyIndexCount = 1,
@@ -241,6 +246,20 @@ struct SharedMemory
     {
         Free();
     }
+};
+
+
+struct PushConstantsUpload
+{
+    VkDeviceAddress BufferA;
+    VkDeviceAddress BufferB;
+    VkDeviceAddress BufferC;
+    int32_t SizeA;
+    int32_t SizeB;
+    int32_t SizeC;
+    int32_t Start;
+    int32_t Range;
+    float Gain;
 };
 
 
@@ -575,7 +594,7 @@ int main(int argc, char *argv[])
         VkPushConstantRange PushConstantRange = {
             .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
             .offset = 0,
-            .size = 8
+            .size = sizeof(PushConstantsUpload)
         };
 
         //VkPipelineLayout PipelineLayout;
@@ -668,20 +687,67 @@ int main(int argc, char *argv[])
         }
     }
 
-    SharedMemory<uint32_t>* StagingArea = new SharedMemory<uint32_t>(Device, MemoryTypeIndex, QueueFamilyIndex, 16);
-    if (!StagingArea->IsValid)
+    SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, 2048);
+    SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, 512);
+    size_t SizeC = BufferA->ElementCount + BufferB->ElementCount - 1;
+    SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeC);
+
+    if (BufferA->IsValid)
     {
-        std::print("Failed to allocate `StagingArea`\n");
-        TEARDOWN_FROM_DEVICE();
+        for (int i = 0; i < BufferA->ElementCount; ++i)
+        {
+            BufferA->Mapped[i] = float(i + 1) / float(BufferA->ElementCount);
+        }
     }
     else
     {
-        StagingArea->Mapped[0] = 1;
-        StagingArea->Mapped[1] = 1;
+        std::print("Failed to allocate `BufferA`\n");
+        TEARDOWN_FROM_DEVICE();
+    }
+
+    if (BufferB->IsValid)
+    {
+        for (int i = 0; i < BufferB->ElementCount; ++i)
+        {
+            BufferB->Mapped[i] = 1.0f - (float(i + 1) / float(BufferB->ElementCount));
+        }
+    }
+    else
+    {
+        std::print("Failed to allocate `BufferB`\n");
+        TEARDOWN_FROM_DEVICE();
+    }
+
+    if (BufferC->IsValid)
+    {
+        for (int i = 0; i < BufferC->ElementCount; ++i)
+        {
+            BufferC->Mapped[i] = 0.0f;
+        }
+    }
+    else
+    {
+        std::print("Failed to allocate `BufferC`\n");
+        TEARDOWN_FROM_DEVICE();
     }
 
     for (VkCommandBuffer& CommandBuffer : CommandBuffers)
     {
+        PushConstantsUpload Upload =
+        {
+            .BufferA = BufferA->DeviceAddress,
+            .BufferB = BufferB->DeviceAddress,
+            .BufferC = BufferC->DeviceAddress,
+            .SizeA = (int)BufferA->ElementCount,
+            .SizeB = (int)BufferB->ElementCount,
+            .SizeC = (int)BufferC->ElementCount,
+            .Start = 0,
+            .Range = (int)BufferC->ElementCount,
+            .Gain = 1.0f
+        };
+
+        uint32_t GroupSize = uint32_t(DIV_UP(BufferC->ElementCount, 32));
+
         VkCommandBufferBeginInfo BeginInfo =
         {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -691,8 +757,8 @@ int main(int argc, char *argv[])
         };
         vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
         vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
-        vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 8, &(StagingArea->DeviceAddress));
-        vkCmdDispatch(CommandBuffer, 1, 1, 1);
+        vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Upload), &Upload);
+        vkCmdDispatch(CommandBuffer, GroupSize, 1, 1);
         vkEndCommandBuffer(CommandBuffer);
     }
 
@@ -711,9 +777,9 @@ int main(int argc, char *argv[])
 
 #if BENCHMARKING
     const auto StartTime = std::chrono::steady_clock::now();
-    const uint64_t FrameCount = 10000;
+    const uint64_t FrameCount = SizeC;
 #else
-    const uint64_t FrameCount = 64;
+    const uint64_t FrameCount = SizeC;
 #endif
 
     for (uint64_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
@@ -741,7 +807,7 @@ int main(int argc, char *argv[])
         }
 #if !BENCHMARKING
         {
-            std::print("Frame {}: {} {}\n", FrameNumber, StagingArea->Mapped[0], StagingArea->Mapped[1]);
+            std::print("Frame {}: {} \n", FrameNumber, BufferC->Mapped[FrameNumber % SizeC]);
         }
 #endif
         if (Result != VK_SUCCESS)
@@ -813,7 +879,9 @@ int main(int argc, char *argv[])
 #endif
 
     vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
-    delete StagingArea;
+    delete BufferA;
+    delete BufferB;
+    delete BufferC;
 
     vkDestroyFence(Device, FrameFence, nullptr);
 
