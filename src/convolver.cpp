@@ -342,7 +342,7 @@ struct WaveData
         }
 
         const float IdealLevel = 0.5;
-        const float Scale = IdealLevel / std::sqrt(Acc); // unscientific, entirely intuition and experimentation
+        const float Scale = IdealLevel / std::sqrt(Acc); // entirely intuition, but holds up so far under experimentation
 
         for (float& Sample : Samples)
         {
