@@ -13,7 +13,7 @@
 #include <chrono>
 #include <algorithm>
 
-#define BENCHMARKING 0
+#define BENCHMARKING 1
 #define REALTIME_MODE 1
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
@@ -792,7 +792,8 @@ int main(int argc, char *argv[])
 
 #if REALTIME_MODE
     // Lowest latency
-    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * 10.0f);
+    const float IdealMinFrameDurationMs = 14.0f;
+    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
     const int32_t MinGroupsPerFrame = 1;
     const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
 #else
@@ -804,10 +805,6 @@ int main(int argc, char *argv[])
     const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
     const int32_t FrameCount = uint32_t(DIV_UP(MaxSizeC, SamplesPerFrame));
     const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
-
-    std::print("Frames span: {} milliseconds\n", FrameSpan);
-    std::print("Samples per frame: {}\n", SamplesPerFrame);
-    std::print("Groups per frame: {}\n", GroupsPerFrame);
 
     SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SamplesPerFrame);
 
@@ -838,23 +835,26 @@ int main(int argc, char *argv[])
     }
 
 #if BENCHMARKING
-    const auto StartTime = std::chrono::steady_clock::now();
+    auto TotalTimeMs = std::chrono::duration<double, std::milli>::zero();
+    auto WorstFrame = std::chrono::duration<double, std::milli>::zero();
+    auto BestFrame = std::chrono::duration<double, std::milli>::max();
+    int32_t RecordedSamples = 0;
+    int32_t HitchCount = 0;
 #endif
 
 #if 1
     bool Shutdown = false;
-    for (int32_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
+    int32_t FrameNumber = 0;
+    for (; FrameNumber < FrameCount; ++FrameNumber)
     {
         SDL_Event Event;
         SDL_PollEvent(&Event);
         if (Event.type == SDL_EVENT_QUIT)
         {
+            std::print("\nUser Requested Quit\n\n");
             Shutdown = true;
             break;
         }
-
-        vkResetFences(Device, 1, &FrameFence);
-        VkCommandBuffer& CommandBuffer = CommandBuffers[FrameNumber % 2];
 
         int32_t Start = FrameNumber * SamplesPerFrame;
         int32_t Range = std::min(std::max(int32_t(MaxSizeC) - Start, 0), SamplesPerFrame);
@@ -864,6 +864,14 @@ int main(int argc, char *argv[])
             std::print("Ran out of data (frame {}/{}), shutting down hot loop.\n", FrameNumber, FrameCount);
             break;
         }
+        bool PartialFrame = Range < SamplesPerFrame || Start < BufferB->ElementCount;
+
+#if BENCHMARKING
+        const auto FrameStartTime = std::chrono::steady_clock::now();
+#endif
+
+        vkResetFences(Device, 1, &FrameFence);
+        VkCommandBuffer& CommandBuffer = CommandBuffers[FrameNumber % 2];
 
         {
             PushConstantsUpload Upload =
@@ -912,9 +920,34 @@ int main(int argc, char *argv[])
         {
             Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
         }
+
+#if BENCHMARKING
+        if (!PartialFrame)
+        {
+            const auto FrameStopTime = std::chrono::steady_clock::now();
+            const std::chrono::duration<double, std::milli> DeltaTime = FrameStopTime - FrameStartTime;
+            TotalTimeMs += DeltaTime;
+            ++RecordedSamples;
+
+            if (DeltaTime.count() > FrameSpan)
+            {
+                ++HitchCount;
+            }
+
+            if (DeltaTime < BestFrame)
+            {
+                BestFrame = DeltaTime;
+            }
+            if (DeltaTime > WorstFrame)
+            {
+                WorstFrame = DeltaTime;
+            }
+        }
+#endif
+
         if (Result != VK_SUCCESS)
         {
-            std::print("????\n");
+            std::print("vkWaitForFences returned an error?\n");
             break;
         }
 
@@ -924,12 +957,70 @@ int main(int argc, char *argv[])
 #endif
 
 #if BENCHMARKING
-    const auto StopTime = std::chrono::steady_clock::now();
-    const std::chrono::duration<double, std::milli> DeltaTime = StopTime - StartTime;
-    double AverageTime = DeltaTime.count() / double(FrameCount);
-    std::print("Iterations: {}\n", FrameCount);
-    std::print("Average Time: {} milliseconds\n", AverageTime);
-    std::print("  Total Time: {} seconds\n", DeltaTime.count() / 1000.f);
+    {
+        if (RecordedSamples == 0)
+        {
+            std::print("Not enough samples recorded for benchmarking.\n\n");
+        }
+
+        std::print("\tSamples per frame: {}\n", SamplesPerFrame);
+        std::print("\t Groups per frame: {}\n", GroupsPerFrame);
+        double AverageTime = 0.0;
+
+        if (RecordedSamples > 0)
+        {
+            double TotalTime = TotalTimeMs.count();
+            AverageTime = TotalTime / double(RecordedSamples);
+
+            std::string TotalTimeUnit = "milliseconds";
+            if (TotalTime >= 1000.0)
+            {
+                TotalTime /= 1000.0;
+                TotalTimeUnit = "seconds";
+                if (TotalTime >= 60.0)
+                {
+                    TotalTime /= 60.0;
+                    TotalTimeUnit = "minutes";
+                    if (TotalTime >= 60.0)
+                    {
+                        TotalTime /= 60.0;
+                        TotalTimeUnit = "hours!?";
+                    }
+                }
+            }
+
+            std::print("\n");
+            std::print("\t Frames processed: {}/{}\n", FrameNumber + 1, FrameCount);
+            std::print("\t Samples recorded: {}\n", RecordedSamples);
+            std::print("\t    Average frame: {:.3f} milliseconds\n", AverageTime);
+            std::print("\t       Best frame: {:.3f} milliseconds\n", BestFrame.count());
+            std::print("\t      Worst frame: {:.3f} milliseconds\n", WorstFrame.count());
+            std::print("\t       Total time: {:.3f} {}\n\n", TotalTime, TotalTimeUnit);
+        }
+
+        std::print("\t Frame audio time: {:.3f} milliseconds\n\n", FrameSpan);
+
+        if (RecordedSamples > 0)
+        {
+            if (BestFrame.count() > FrameSpan)
+            {
+                std::print("The best frame time is higher than the frame's playback duration!!\n");
+            }
+            else if (AverageTime > FrameSpan)
+            {
+                std::print("The average frame time is higher than the frame's playback duration!\n");
+            }
+            else if (WorstFrame.count() > FrameSpan)
+            {
+                std::print("The worst frame time is higher than the frame's playback duration!\n");
+            }
+        }
+
+        if (HitchCount > 0)
+        {
+            std::print("Over budget frame count: {}\n\n", HitchCount);
+        }
+    }
 #endif
 
     if (!Shutdown)
