@@ -13,9 +13,9 @@
 #include <chrono>
 #include <algorithm>
 
-#define BENCHMARKING 0
+#define BENCHMARKING 1
 
-#define SOUND_CHECK 0
+#define SOUND_CHECK 1
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
 
@@ -225,6 +225,18 @@ struct SharedMemory
         }
     }
 
+    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, std::vector<ElementType> Upload)
+        : SharedMemory(InDevice, MemoryTypeIndex, QueueFamilyIndex, Upload.size())
+    {
+        if (IsValid)
+        {
+            for (int i = 0; i < ElementCount; ++i)
+            {
+                Mapped[i] = Upload[i];
+            }
+        }
+    }
+
     void Free()
     {
         if (InitLevel >= 1)
@@ -264,30 +276,101 @@ struct PushConstantsUpload
 };
 
 
+struct WaveData
+{
+    std::vector<float> Samples;
+
+    WaveData()
+    {
+    }
+
+    WaveData(const SDL_AudioSpec& TargetSpec, const char* Path)
+    {
+        SDL_AudioStream* Stream = nullptr;
+
+        const std::string FullPath = std::format("{}{}", SDL_GetBasePath(), Path);
+        SDL_AudioSpec ImportSpec;
+        uint8_t* ImportData = nullptr;
+        uint32_t ImportSize = 0;
+
+        bool Error = true;
+        if (SDL_LoadWAV(FullPath.c_str(), &ImportSpec, &ImportData, &ImportSize))
+        {
+            std::print("Opening {}\n", FullPath);
+            std::print(" - Frequency: {} -> {}\n", ImportSpec.freq, TargetSpec.freq);
+            std::print(" - Channels: {} -> {}\n", ImportSpec.channels, TargetSpec.channels);
+            std::print(" - Float: {} -> {}\n",
+                       bool(SDL_AUDIO_ISFLOAT(ImportSpec.format)), bool(SDL_AUDIO_ISFLOAT(TargetSpec.format)));
+            std::print(" - Word Size: {} -> {}\n",
+                       SDL_AUDIO_BYTESIZE(ImportSpec.format), SDL_AUDIO_BYTESIZE(TargetSpec.format));
+            std::print("\n");
+
+            size_t SampleCount = ImportSize / SDL_AUDIO_FRAMESIZE(ImportSpec);
+            Samples.resize(SampleCount);
+
+            SDL_AudioStream* Converter = SDL_CreateAudioStream(&ImportSpec, &TargetSpec);
+            {
+                uint32_t ImportFrameSize = SDL_AUDIO_FRAMESIZE(ImportSpec);
+                uint32_t TargetFrameSize = SDL_AUDIO_FRAMESIZE(TargetSpec);
+                for (int i = 0; i < SampleCount; ++i)
+                {
+                    uint32_t ImportOffset = ImportFrameSize * i;
+                    uint32_t TargetOffset = TargetFrameSize * i;
+                    uint8_t* TargetData = (uint8_t*)Samples.data();
+                    SDL_PutAudioStreamData(Converter, (ImportData + ImportOffset), ImportFrameSize);
+                    SDL_FlushAudioStream(Converter);
+                    SDL_GetAudioStreamData(Converter, (TargetData + TargetOffset), TargetFrameSize);
+                }
+                Error = false;
+            }
+            SDL_DestroyAudioStream(Converter);
+        }
+
+        if (Error)
+        {
+            Samples.clear();
+            std::print("Couldn't load {}: {}\n", FullPath, SDL_GetError());
+        }
+    }
+};
+
+
 int main(int argc, char *argv[])
 {
     if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
-        SDL_Log("Could not initialize SDL: %s", SDL_GetError());
+        std::print("Could not initialize SDL: {}", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
     const int SampleRate = 22050;
-    SDL_AudioStream* Stream = nullptr;
+    SDL_AudioStream* OutStream = nullptr;
+    WaveData WaveA;
+    WaveData WaveB;
+
     {
-        SDL_AudioSpec AudioSpec = {
+        SDL_AudioSpec OutSpec = {
             .format = SDL_AUDIO_F32,
             .channels = 1,
             .freq = SampleRate,
         };
 
-        Stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &AudioSpec, nullptr, nullptr);
-        if (!Stream)
+        OutStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &OutSpec, nullptr, nullptr);
+        if (!OutStream)
         {
-            SDL_Log("Could not create audio stream: %s", SDL_GetError());
+            std::print("Could not create audio stream: {}", SDL_GetError());
             return SDL_APP_FAILURE;
         }
-        SDL_ResumeAudioStreamDevice(Stream);
+        SDL_ResumeAudioStreamDevice(OutStream);
+
+        WaveA = WaveData(OutSpec, "generations_stereo.wav");
+        WaveB = WaveData(OutSpec, "bell.wav");
     }
+
+    if (WaveA.Samples.size() == 0 || WaveB.Samples.size() == 0)
+    {
+        return SDL_APP_FAILURE;
+    }
+    std::reverse(WaveB.Samples.begin(), WaveB.Samples.end());
 
     std::set<std::string> RequestedLayers;
     {
@@ -688,32 +771,18 @@ int main(int argc, char *argv[])
         }
     }
 
-    SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, 2048);
-    SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, 512);
+    SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveA.Samples);
+    SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveB.Samples);
     size_t SizeC = BufferA->ElementCount + BufferB->ElementCount - 1;
     SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeC);
 
-    if (BufferA->IsValid)
-    {
-        for (int i = 0; i < BufferA->ElementCount; ++i)
-        {
-            BufferA->Mapped[i] = float(i + 1) / float(BufferA->ElementCount);
-        }
-    }
-    else
+    if (!BufferA->IsValid)
     {
         std::print("Failed to allocate `BufferA`\n");
         TEARDOWN_FROM_DEVICE();
     }
 
-    if (BufferB->IsValid)
-    {
-        for (int i = 0; i < BufferB->ElementCount; ++i)
-        {
-            BufferB->Mapped[i] = 1.0f - (float(i + 1) / float(BufferB->ElementCount));
-        }
-    }
-    else
+    if (!BufferB->IsValid)
     {
         std::print("Failed to allocate `BufferB`\n");
         TEARDOWN_FROM_DEVICE();
@@ -750,14 +819,27 @@ int main(int argc, char *argv[])
 #endif
 
     // This determines the latency vs throughput tradeoff.
-    const int32_t GroupsPerFrame = 128;
+
+    const int32_t TargetSamplesPerFrame = SampleRate; //(float(SampleRate) / 1000.0f * 10.0f);
 
     const int32_t GroupSize = 32;
+    const int32_t GroupsPerFrame = DIV_UP(TargetSamplesPerFrame, 32);
+
+    std::print("{}, {}\n", TargetSamplesPerFrame, GroupsPerFrame);
+
     const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
     const int32_t FrameCount = uint32_t(DIV_UP(BufferC->ElementCount, SamplesPerFrame));
 
+#if 1
     for (int32_t FrameNumber = 0; FrameNumber < FrameCount; ++FrameNumber)
     {
+        SDL_Event Event;
+        SDL_PollEvent(&Event);
+        if (Event.type == SDL_EVENT_QUIT)
+        {
+            break;
+        }
+
         vkResetFences(Device, 1, &FrameFence);
         VkCommandBuffer& CommandBuffer = CommandBuffers[FrameNumber % 2];
 
@@ -780,7 +862,7 @@ int main(int argc, char *argv[])
                 .SizeC = int32_t(BufferC->ElementCount),
                 .Start = Start,
                 .Range = Range,
-                .Gain = 1.0f
+                .Gain = 1.0f / 100.0f
             };
 
             VkCommandBufferBeginInfo BeginInfo =
@@ -816,19 +898,13 @@ int main(int argc, char *argv[])
         {
             Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
         }
-#if !BENCHMARKING
-        for (int i = 0; i < Range; ++i)
-        {
-            int Sample = (FrameNumber * SamplesPerFrame + i) % SizeC;
-            std::print("Frame {}: {} \n", Sample, BufferC->Mapped[Sample]);
-        }
-#endif
         if (Result != VK_SUCCESS)
         {
             std::print("????\n");
             break;
         }
     }
+#endif
 
 #if BENCHMARKING
     const auto StopTime = std::chrono::steady_clock::now();
@@ -837,10 +913,17 @@ int main(int argc, char *argv[])
     std::print("Iterations: {}\n", FrameCount);
     std::print("Average Time: {} milliseconds\n", AverageTime);
     std::print("  Total Time: {} milliseconds\n", DeltaTime.count());
+#elif 0
+    for (int i = 0; i < BufferC->ElementCount; ++i)
+    {
+        std::print("Sample {}: {} \n", i, BufferC->Mapped[i]);
+    }
 #endif
 
 #if SOUND_CHECK
     {
+        std::print("Starting Playback...\n");
+        /*
         const float TimeSpan = 2.0f;
         const int SampleCount = int(float(SampleRate) * TimeSpan);
 
@@ -873,13 +956,15 @@ int main(int argc, char *argv[])
             Cursor = (Cursor + 1) % SampleCount;
         }
 
-        SDL_PutAudioStreamData(Stream, Samples.data(), sizeof(float) * Samples.size());
+        SDL_PutAudioStreamData(OutStream, Samples.data(), sizeof(float) * Samples.size());
+        */
+        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, BufferC->ByteSize);
+        const float TimeSpan = 1.0f;
 
-        SDL_Event Event;
         int RemainingBytes = 1;
         do
         {
-            //SDL_PollEvent(&Event);
+            SDL_Event Event;
             if (SDL_WaitEventTimeout(&Event, TimeSpan * 1000))
             {
                 if (Event.type == SDL_EVENT_QUIT)
@@ -887,7 +972,7 @@ int main(int argc, char *argv[])
                     break;
                 }
             }
-            RemainingBytes = SDL_GetAudioStreamQueued(Stream);
+            RemainingBytes = SDL_GetAudioStreamQueued(OutStream);
         }
         while (RemainingBytes > 0);
     }
@@ -903,7 +988,7 @@ int main(int argc, char *argv[])
 
     TEARDOWN_FROM_NOMINAL();
 
-    SDL_DestroyAudioStream(Stream);
+    SDL_DestroyAudioStream(OutStream);
 
     std::print("Done!\n");
     return 0;
