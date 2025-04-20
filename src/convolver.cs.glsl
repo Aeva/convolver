@@ -40,17 +40,16 @@ void main()
     const int Stop = Start + Range;
     const int LocalIndex = int(gl_GlobalInvocationID.x);
     const int Sample = Start + LocalIndex;
-    if (Sample < Stop || LocalIndex >= SizeC)
+    if (Sample < Stop && LocalIndex < SizeC)
     {
         float Acc = 0.0f;
         const int Iterations = min(min(SizeA, SizeB), Sample + 1);
         const int StartA = max(0, Sample + 1 - Iterations);
-        const int StartB = max(0, SizeB - Iterations);
+        const int StartB = SizeB - Iterations;
         for (int i = 0; i < Iterations; ++i)
         {
-            // The modulos here are to prevent overflow.  Wrap around is not expected.
-            const float SampleA = BufferA.Data[(StartA + i) % SizeA];
-            const float SampleB = BufferB.Data[(StartB + i) % SizeB];
+            const float SampleA = BufferA.Data[StartA + i];
+            const float SampleB = BufferB.Data[StartB + i];
             Acc += SampleA * IR_MUTATOR(SampleB);
         }
 

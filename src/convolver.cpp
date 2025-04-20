@@ -998,7 +998,7 @@ int main(int argc, char *argv[])
             std::print("\t       Total time: {:.3f} {}\n\n", TotalTime, TotalTimeUnit);
         }
 
-        std::print("\t Frame audio time: {:.3f} milliseconds\n\n", FrameSpan);
+        std::print("\t    Audio latency: {:.3f} milliseconds minimum\n\n", FrameSpan);
 
         if (RecordedSamples > 0)
         {
