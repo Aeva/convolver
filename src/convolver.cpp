@@ -792,7 +792,7 @@ int main(int argc, char *argv[])
 
 #if REALTIME_MODE
     // Lowest latency
-    const float IdealMinFrameDurationMs = 14.0f;
+    const float IdealMinFrameDurationMs = 16.0f; // Raise this if you have hitching problems.
     const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
     const int32_t MinGroupsPerFrame = 1;
     const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));

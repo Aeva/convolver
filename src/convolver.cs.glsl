@@ -7,6 +7,13 @@
 #define DYNAMIC_GAIN 0
 
 
+#if ABS_MODE
+    #define IR_MUTATOR(Sample) abs(Sample)
+#else
+    #define IR_MUTATOR(Sample) (Sample)
+#endif
+
+
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer SomeBufferRef
 {
     float Data[];
@@ -33,20 +40,20 @@ void main()
     const int Stop = Start + Range;
     const int LocalIndex = int(gl_GlobalInvocationID.x);
     const int Sample = Start + LocalIndex;
-    if (Sample < Stop)
+    if (Sample < Stop || LocalIndex >= SizeC)
     {
         float Acc = 0.0f;
         const int Iterations = min(min(SizeA, SizeB), Sample + 1);
         const int StartA = max(0, Sample + 1 - Iterations);
-        const int StartB = SizeB - Iterations;
+        const int StartB = max(0, SizeB - Iterations);
         for (int i = 0; i < Iterations; ++i)
         {
-#if ABS_MODE
-            Acc += BufferA.Data[StartA + i] * abs(BufferB.Data[StartB + i]);
-#else
-            Acc += BufferA.Data[StartA + i] * BufferB.Data[StartB + i];
-#endif
+            // The modulos here are to prevent overflow.  Wrap around is not expected.
+            const float SampleA = BufferA.Data[(StartA + i) % SizeA];
+            const float SampleB = BufferB.Data[(StartB + i) % SizeB];
+            Acc += SampleA * IR_MUTATOR(SampleB);
         }
-        BufferC.Data[LocalIndex] = Acc * Gain; // wave sum on Acc if we parallelize the inner loop
+
+        BufferC.Data[LocalIndex] = Acc * Gain;
     }
 }
