@@ -974,7 +974,6 @@ int main(int argc, char *argv[])
         }
 
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * Range);
-        //SDL_FlushAudioStream(OutStream);
     }
 #endif
 
@@ -1047,6 +1046,7 @@ int main(int argc, char *argv[])
 
     if (!Shutdown)
     {
+        SDL_FlushAudioStream(OutStream);
         int RemainingBytes = 1;
         do
         {
