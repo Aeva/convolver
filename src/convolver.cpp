@@ -275,25 +275,25 @@ struct PushConstantsUpload
 };
 
 
-struct WaveData
+struct WaveStream
 {
-    std::vector<float> Samples;
+    SDL_AudioStream* Stream = nullptr;
+    uint8_t* WaveData = nullptr;
+    uint32_t WaveSize = 0;
 
-    WaveData()
+    SDL_AudioSpec ImportSpec;
+    SDL_AudioSpec TargetSpec;
+
+    WaveStream()
     {
     }
 
-    WaveData(const SDL_AudioSpec& TargetSpec, const char* Path)
+    WaveStream(const SDL_AudioSpec& InTargetSpec, const char* Path)
+        : TargetSpec(InTargetSpec)
     {
-        SDL_AudioStream* Stream = nullptr;
-
         const std::string FullPath = std::format("{}{}", SDL_GetBasePath(), Path);
-        SDL_AudioSpec ImportSpec;
-        uint8_t* ImportData = nullptr;
-        uint32_t ImportSize = 0;
 
-        bool Error = true;
-        if (SDL_LoadWAV(FullPath.c_str(), &ImportSpec, &ImportData, &ImportSize))
+        if (SDL_LoadWAV(FullPath.c_str(), &ImportSpec, &WaveData, &WaveSize))
         {
             std::print("Opening {}\n", FullPath);
             std::print(" - Frequency: {} -> {}\n", ImportSpec.freq, TargetSpec.freq);
@@ -304,32 +304,72 @@ struct WaveData
                        SDL_AUDIO_BYTESIZE(ImportSpec.format), SDL_AUDIO_BYTESIZE(TargetSpec.format));
             std::print("\n");
 
-            size_t SampleCount = ImportSize / SDL_AUDIO_FRAMESIZE(ImportSpec);
-            Samples.resize(SampleCount);
-
-            SDL_AudioStream* Converter = SDL_CreateAudioStream(&ImportSpec, &TargetSpec);
-            {
-                uint32_t ImportFrameSize = SDL_AUDIO_FRAMESIZE(ImportSpec);
-                uint32_t TargetFrameSize = SDL_AUDIO_FRAMESIZE(TargetSpec);
-                for (int i = 0; i < SampleCount; ++i)
-                {
-                    uint32_t ImportOffset = ImportFrameSize * i;
-                    uint32_t TargetOffset = TargetFrameSize * i;
-                    uint8_t* TargetData = (uint8_t*)Samples.data();
-                    SDL_PutAudioStreamData(Converter, (ImportData + ImportOffset), ImportFrameSize);
-                    SDL_FlushAudioStream(Converter);
-                    SDL_GetAudioStreamData(Converter, (TargetData + TargetOffset), TargetFrameSize);
-                }
-                Error = false;
-            }
-            SDL_DestroyAudioStream(Converter);
+            Stream = SDL_CreateAudioStream(&ImportSpec, &TargetSpec);
+            SDL_PutAudioStreamData(Stream, WaveData, WaveSize);
+            SDL_FlushAudioStream(Stream);
         }
-
-        if (Error)
+        else
         {
-            Samples.clear();
+            Reset();
             std::print("Couldn't load {}: {}\n", FullPath, SDL_GetError());
         }
+    }
+
+    void Transcode(std::vector<float>& OutSamples)
+    {
+        if (Stream)
+        {
+            uint32_t ImportFrameSize = SDL_AUDIO_FRAMESIZE(ImportSpec);
+            uint32_t TargetFrameSize = SDL_AUDIO_FRAMESIZE(TargetSpec);
+
+            uint32_t SampleCount = WaveSize / ImportFrameSize;
+            OutSamples.resize(SampleCount);
+
+            uint32_t OutBytes = SampleCount * TargetFrameSize;
+            uint8_t* TargetData = (uint8_t*)OutSamples.data();
+            SDL_GetAudioStreamData(Stream, TargetData, OutBytes);
+            Reset();
+        }
+        else
+        {
+            OutSamples.clear();
+        }
+    }
+
+    void Reset()
+    {
+        if (Stream)
+        {
+            SDL_DestroyAudioStream(Stream);
+            Stream = nullptr;
+        }
+        if (WaveData)
+        {
+            SDL_free(WaveData);
+            WaveData = nullptr;
+            WaveSize = 0;
+        }
+    }
+
+    ~WaveStream()
+    {
+        Reset();
+    }
+};
+
+
+struct WaveData
+{
+    std::vector<float> Samples;
+
+    WaveData()
+    {
+    }
+
+    WaveData(const SDL_AudioSpec& TargetSpec, const char* Path)
+    {
+        WaveStream Stream(TargetSpec, Path);
+        Stream.Transcode(Samples);
     }
 
     void NormalizeImpulseResponse()
