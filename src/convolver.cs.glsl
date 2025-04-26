@@ -33,6 +33,12 @@ void main()
     const int Stop = Start + Range;
     const int LocalIndex = int(gl_GlobalInvocationID.x);
     const int Sample = Start + LocalIndex;
+    // More assumptions:
+    //  - SizeC == SamplesPerFrame
+    //  - (Start % SamplesPerFrame) == 0
+    //  - SizeA == SamplesPerFrame * 2
+    //const int FrameNumber = Start % SizeC;
+    //const int FrameReadOffsetA = (FrameNumber % 2) * SizeC;
     if (Sample < Stop)
     {
         float Acc = 0.0f;
@@ -41,7 +47,7 @@ void main()
         const int StartB = SizeB - Iterations; // Possible range is 0 to SizeB - 1, inclusive.
         for (int i = 0; i < Iterations; ++i)
         {
-            const float SampleA = BufferA.Data[StartA + i];
+            const float SampleA = BufferA.Data[(StartA + i) % SizeA];
             const float SampleB = BufferB.Data[StartB + i];
             Acc += SampleA * SampleB;
         }

@@ -8,6 +8,7 @@
 #include <format>
 #include <vector>
 #include <set>
+#include <cstring>
 #include <string>
 #include <ranges>
 #include <chrono>
@@ -225,6 +226,18 @@ struct SharedMemory
         }
     }
 
+    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, size_t InElementCount, ElementType Zero)
+        : SharedMemory(InDevice, MemoryTypeIndex, QueueFamilyIndex, InElementCount)
+    {
+        if (IsValid)
+        {
+            for (int i = 0; i < ElementCount; ++i)
+            {
+                Mapped[i] = Zero;
+            }
+        }
+    }
+
     SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, std::vector<ElementType> Upload)
         : SharedMemory(InDevice, MemoryTypeIndex, QueueFamilyIndex, Upload.size())
     {
@@ -419,6 +432,7 @@ int main(int argc, char *argv[])
         SDL_ResumeAudioStreamDevice(OutStream);
 
         //WaveA = WaveData(OutSpec, "generations_stereo.wav");
+        //WaveA = WaveData(OutSpec, "castor_pollux_rings_seq.wav");
         WaveA = WaveData(OutSpec, "strange_birds.wav");
         WaveB = WaveData(OutSpec, "chest.wav");
     }
@@ -833,52 +847,48 @@ int main(int argc, char *argv[])
         }
     }
 
-    SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveA.Samples);
+    const int32_t GroupSize = 32;
+    const int32_t HistoryGroupsHint = std::min(DIV_UP(int32_t(WaveB.Samples.size()), GroupSize), 1);
+
+#if REALTIME_MODE
+    // Lowest latency
+    //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
+    const float IdealMinFrameDurationMs = 16.0f; // Raise this if you have hitching problems.
+    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
+    const int32_t MinGroupsPerFrame = HistoryGroupsHint;
+    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
+#else
+    // Lowest total time
+    const int32_t MaxGroupsPerFrame = 65535;
+    const int32_t GroupsPerFrame = std::min(int32_t(DIV_UP(WaveA.Samples.size(), GroupSize)), MaxGroupsPerFrame);
+#endif
+
+    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
+    const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
+
+    const int32_t SizeB = WaveB.Samples.size();
+    const int32_t SizeC = SamplesPerFrame;
+
+    // History pages needs to be long enough to prevent overlap in the ring buffer between live convolution ranges.
+    const int32_t HistoryPages = DIV_UP(SizeB * 2, SizeC);
+    const int32_t UploadPages = 1;
+    const int32_t SizeA = SamplesPerFrame * (UploadPages + HistoryPages);
+
+    SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeA, 0.0f);
     SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveB.Samples);
+    SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeC, 0.0f);
 
     if (!BufferA->IsValid)
     {
         std::print("Failed to allocate `BufferA`\n");
         TEARDOWN_FROM_DEVICE();
     }
-
-    if (!BufferB->IsValid)
+    else if (!BufferB->IsValid)
     {
         std::print("Failed to allocate `BufferB`\n");
         TEARDOWN_FROM_DEVICE();
     }
-
-    // This determines the latency vs throughput tradeoff.
-
-    const int32_t GroupSize = 32;
-    const size_t MaxSizeC = BufferA->ElementCount;
-
-#if REALTIME_MODE
-    // Lowest latency
-    const float IdealMinFrameDurationMs = 16.0f; // Raise this if you have hitching problems.
-    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
-    const int32_t MinGroupsPerFrame = 1;
-    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
-#else
-    // Lowest total time
-    const int32_t MaxGroupsPerFrame = 65535;
-    const int32_t GroupsPerFrame = std::min(int32_t(DIV_UP(MaxSizeC, GroupSize)), MaxGroupsPerFrame);
-#endif
-
-    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
-    const int32_t FrameCount = uint32_t(DIV_UP(MaxSizeC, SamplesPerFrame));
-    const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
-
-    SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SamplesPerFrame);
-
-    if (BufferC->IsValid)
-    {
-        for (int i = 0; i < BufferC->ElementCount; ++i)
-        {
-            BufferC->Mapped[i] = 0.0f;
-        }
-    }
-    else
+    else if (!BufferC->IsValid)
     {
         std::print("Failed to allocate `BufferC`\n");
         TEARDOWN_FROM_DEVICE();
@@ -908,7 +918,7 @@ int main(int argc, char *argv[])
 #if 1
     bool Shutdown = false;
     int32_t FrameNumber = 0;
-    for (; FrameNumber < FrameCount; ++FrameNumber)
+    while (!Shutdown)
     {
         SDL_Event Event;
         SDL_PollEvent(&Event);
@@ -919,15 +929,28 @@ int main(int argc, char *argv[])
             break;
         }
 
-        int32_t Start = FrameNumber * SamplesPerFrame;
-        int32_t Range = std::min(std::max(int32_t(MaxSizeC) - Start, 0), SamplesPerFrame);
-        int32_t GroupsThisFrame = DIV_UP(Range, GroupSize);
-        if (Range == 0)
+        const int32_t Start = FrameNumber * SamplesPerFrame;
+        int32_t GroupsThisFrame = DIV_UP(SamplesPerFrame, GroupSize);
+
+        bool PartialFrame = Start < BufferB->ElementCount;
+
         {
-            std::print("Ran out of data (frame {}/{}), shutting down hot loop.\n", FrameNumber, FrameCount);
-            break;
+            // This is currently guaranteed: (Start % SamplesPerFrame) == 0
+            const int ReadStart = Start;
+            const int WriteStart = (FrameNumber % HistoryPages) * SamplesPerFrame;
+            float* WriteHead = BufferA->Mapped + WriteStart;
+            float* ReadHead = WaveA.Samples.data() + ReadStart;
+            std::memcpy(WriteHead, ReadHead, sizeof(float) * SamplesPerFrame);
         }
-        bool PartialFrame = Range < SamplesPerFrame || Start < BufferB->ElementCount;
+
+#if 0
+        std::print("\nin: ");
+        for (int ReadCursor = 0; ReadCursor < 8; ++ReadCursor)
+        {
+            std::print("{}, ", BufferA->Mapped[ReadCursor]);
+        }
+        std::print("\n");
+#endif
 
 #if BENCHMARKING
         const auto FrameStartTime = std::chrono::steady_clock::now();
@@ -946,7 +969,7 @@ int main(int argc, char *argv[])
                 .SizeB = int32_t(BufferB->ElementCount),
                 .SizeC = int32_t(BufferC->ElementCount),
                 .Start = Start,
-                .Range = Range
+                .Range = SamplesPerFrame
             };
 
             VkCommandBufferBeginInfo BeginInfo =
@@ -1013,7 +1036,17 @@ int main(int argc, char *argv[])
             break;
         }
 
-        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * Range);
+        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
+        ++FrameNumber;
+
+#if 0
+        std::print("out: ");
+        for (int ReadCursor = 0; ReadCursor < 8; ++ReadCursor)
+        {
+            std::print("{}, ", BufferC->Mapped[ReadCursor]);
+        }
+        std::print("\n");
+#endif
     }
 #endif
 
@@ -1051,7 +1084,7 @@ int main(int argc, char *argv[])
             }
 
             std::print("\n");
-            std::print("\t Frames processed: {}/{}\n", FrameNumber + 1, FrameCount);
+            std::print("\t Frames processed: {}\n", FrameNumber);
             std::print("\t Samples recorded: {}\n", RecordedSamples);
             std::print("\t    Average frame: {:.3f} milliseconds\n", AverageTime);
             std::print("\t       Best frame: {:.3f} milliseconds\n", BestFrame.count());
