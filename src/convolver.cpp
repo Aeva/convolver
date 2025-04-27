@@ -408,12 +408,34 @@ struct WaveData
 
 int main(int argc, char *argv[])
 {
-    if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
+    const int SampleRate = 22050;
+    const int32_t GroupSize = 32;
+
+    //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
+    const float IdealMinFrameDurationMs = 15.0f; // Raise this if you have hitching problems.
+    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
+    const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
+    const int32_t MinGroupsPerFrame = 1;
+    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
+
+    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
+    const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
+    const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
+
+    const std::string SampleFramesHintStr = std::format("{}", BytesPerFrame);
+
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_NAME, "Convolver");
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_ROLE, "Magic");
+
+    //SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "alsa");
+    //SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, SampleFramesHintStr.c_str());
+
+    if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS))
+    {
         std::print("Could not initialize SDL: {}", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
-    const int SampleRate = 22050;
     SDL_AudioStream* InStream = nullptr;
     SDL_AudioStream* OutStream = nullptr;
 #if !LIVE_STREAM_MODE
@@ -422,7 +444,8 @@ int main(int argc, char *argv[])
     WaveData WaveB;
 
     {
-        SDL_AudioSpec OutSpec = {
+        SDL_AudioSpec OutSpec =
+        {
             .format = SDL_AUDIO_F32,
             .channels = 1,
             .freq = SampleRate,
@@ -488,7 +511,7 @@ int main(int argc, char *argv[])
         InStream = WaveA->Stream;
 #endif
 
-        WaveB = WaveData(OutSpec, "bell.wav");
+        WaveB = WaveData(OutSpec, "glass.wav");
     }
 
     if (InStream == nullptr || WaveB.Samples.size() == 0)
@@ -900,20 +923,6 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
-
-    const int32_t GroupSize = 32;
-    const int32_t HistoryGroupsHint = std::min(DIV_UP(int32_t(WaveB.Samples.size()), GroupSize), 1);
-
-    //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
-    const float IdealMinFrameDurationMs = 16.0f; // Raise this if you have hitching problems.
-    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
-    const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
-    const int32_t MinGroupsPerFrame = HistoryGroupsHint;
-    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
-
-    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
-    const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
-    const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
 
     const int32_t SizeB = WaveB.Samples.size();
     const int32_t SizeC = SamplesPerFrame;
