@@ -288,6 +288,7 @@ struct PushConstantsUpload
 
 struct WaveStream
 {
+    std::string Name = "";
     SDL_AudioStream* Stream = nullptr;
     uint8_t* WaveData = nullptr;
     uint32_t WaveSize = 0;
@@ -302,6 +303,7 @@ struct WaveStream
     WaveStream(const SDL_AudioSpec& InTargetSpec, const char* Path)
         : TargetSpec(InTargetSpec)
     {
+        Name = Path;
         const std::string FullPath = std::format("{}{}", SDL_GetBasePath(), Path);
 
         if (SDL_LoadWAV(FullPath.c_str(), &ImportSpec, &WaveData, &WaveSize))
@@ -321,8 +323,8 @@ struct WaveStream
         }
         else
         {
-            Reset();
             std::print("Couldn't load {}: {}\n", FullPath, SDL_GetError());
+            Reset("error handler");
         }
     }
 
@@ -339,7 +341,7 @@ struct WaveStream
             uint32_t OutBytes = SampleCount * TargetFrameSize;
             uint8_t* TargetData = (uint8_t*)OutSamples.data();
             SDL_GetAudioStreamData(Stream, TargetData, OutBytes);
-            Reset();
+            Reset("transcoder");
         }
         else
         {
@@ -347,12 +349,13 @@ struct WaveStream
         }
     }
 
-    void Reset()
+    void Reset(const char* Hint)
     {
         if (Stream)
         {
             SDL_DestroyAudioStream(Stream);
             Stream = nullptr;
+            std::print("Stream \"{}\" closed by {}.\n", Name, Hint);
         }
         if (WaveData)
         {
@@ -364,7 +367,7 @@ struct WaveStream
 
     ~WaveStream()
     {
-        Reset();
+        Reset("destructor");
     }
 };
 
@@ -411,7 +414,7 @@ int main(int argc, char *argv[])
 
     const int SampleRate = 22050;
     SDL_AudioStream* OutStream = nullptr;
-    WaveData WaveA;
+    WaveStream* WaveA = nullptr;
     WaveData WaveB;
 
     {
@@ -429,18 +432,18 @@ int main(int argc, char *argv[])
         }
         SDL_ResumeAudioStreamDevice(OutStream);
 
-        WaveA = WaveData(OutSpec, "strange_birds.wav");
+        WaveA = new WaveStream(OutSpec, "strange_birds.wav");
         WaveB = WaveData(OutSpec, "chest.wav");
     }
 
-    if (WaveA.Samples.size() == 0 || WaveB.Samples.size() == 0)
+    if (WaveA->Stream == nullptr || WaveB.Samples.size() == 0)
     {
+        std::print("Unable to open input streams and/or files\n");
         return SDL_APP_FAILURE;
     }
     else
     {
         std::reverse(WaveB.Samples.begin(), WaveB.Samples.end());
-        WaveA.Samples.resize(WaveA.Samples.size() + WaveB.Samples.size(), 0.0f);
         WaveB.NormalizeImpulseResponse();
     }
 
@@ -854,6 +857,7 @@ int main(int argc, char *argv[])
 
     const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
     const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
+    const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
 
     const int32_t SizeB = WaveB.Samples.size();
     const int32_t SizeC = SamplesPerFrame;
@@ -921,24 +925,43 @@ int main(int argc, char *argv[])
         const int32_t Stop = Start + SamplesPerFrame;
         const int32_t GroupsThisFrame = DIV_UP(SamplesPerFrame, GroupSize);
 
-        bool PartialFrame = Start < BufferB->ElementCount || Stop >= WaveA.Samples.size();
+        bool PartialFrame = Start < BufferB->ElementCount;
 
         {
+            if (WaveA->Stream == nullptr)
+            {
+                std::print("\nWhat?!: {}\n", SDL_GetError());
+                break;
+            }
+
+            const int32_t BytesReady = int32_t(std::min(SDL_GetAudioStreamAvailable(WaveA->Stream), int(BytesPerFrame)));
+            if (BytesReady < 0)
+            {
+                std::print("\nError preparing to read from input stream: {}\n", SDL_GetError());
+                break;
+            }
+            const int32_t SamplesReady = BytesReady / sizeof(float);
+
             // This is currently guaranteed: (Start % SamplesPerFrame) == 0
-            const int ReadStart = Start;
             const int WriteStart = (FrameNumber % HistoryPages) * SamplesPerFrame;
             float* WriteHead = BufferA->Mapped + WriteStart;
-            float* ReadHead = WaveA.Samples.data() + ReadStart;
 
-            const int32_t ReadSamples = std::min(SamplesPerFrame, std::max(0, int32_t(WaveA.Samples.size()) - Stop));
-            const int32_t PaddingSamples = SamplesPerFrame - ReadSamples;
+            if (SamplesReady > 0)
+            {
+                const int BytesWritten = SDL_GetAudioStreamData(WaveA->Stream, WriteHead, SamplesReady * sizeof(float));
+                if (BytesWritten < 0)
+                {
+                    std::print("\nError reading input stream: {}\n", SDL_GetError());
+                    break;
+                }
+            }
 
-            std::memcpy(WriteHead, ReadHead, sizeof(float) * ReadSamples);
+            const int32_t PaddingSamples = SamplesPerFrame - SamplesReady;
 
             if (PaddingSamples > 0)
             {
                 PartialFrame = true;
-                const int32_t PaddingStart = WriteStart + ReadSamples;
+                const int32_t PaddingStart = WriteStart + SamplesReady;
                 for (int p = 0; p < PaddingSamples; ++p)
                 {
                     BufferA->Mapped[(PaddingStart + p) % SizeA] = 0.0f;
@@ -1114,6 +1137,12 @@ int main(int argc, char *argv[])
         }
     }
 #endif
+
+    if (WaveA)
+    {
+        delete WaveA;
+        WaveA = nullptr;
+    }
 
     if (!Shutdown)
     {

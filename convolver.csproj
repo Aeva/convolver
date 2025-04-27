@@ -58,6 +58,7 @@
   -->
 
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <!--<CPlusPlusCompiler>clang++ -fsanitize=address -g -O0 -fno-omit-frame-pointer</CPlusPlusCompiler>-->
     <CPlusPlusCompiler>clang++</CPlusPlusCompiler>
   </PropertyGroup>
 
