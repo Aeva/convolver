@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 
+#define LIVE_STREAM_MODE 1
 #define BENCHMARKING 1
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
@@ -413,8 +414,11 @@ int main(int argc, char *argv[])
     }
 
     const int SampleRate = 22050;
+    SDL_AudioStream* InStream = nullptr;
     SDL_AudioStream* OutStream = nullptr;
+#if !LIVE_STREAM_MODE
     WaveStream* WaveA = nullptr;
+#endif
     WaveData WaveB;
 
     {
@@ -427,16 +431,28 @@ int main(int argc, char *argv[])
         OutStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &OutSpec, nullptr, nullptr);
         if (!OutStream)
         {
-            std::print("Could not create audio stream: {}", SDL_GetError());
+            std::print("Could not create output audio stream: {}", SDL_GetError());
             return SDL_APP_FAILURE;
         }
         SDL_ResumeAudioStreamDevice(OutStream);
 
+#if LIVE_STREAM_MODE
+        InStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &OutSpec, nullptr, nullptr);
+        if (!InStream)
+        {
+            std::print("Could not create input audio stream: {}", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+        SDL_ResumeAudioStreamDevice(InStream);
+#else
         WaveA = new WaveStream(OutSpec, "strange_birds.wav");
+        InStream = WaveA->Stream;
+#endif
+
         WaveB = WaveData(OutSpec, "chest.wav");
     }
 
-    if (WaveA->Stream == nullptr || WaveB.Samples.size() == 0)
+    if (InStream == nullptr || WaveB.Samples.size() == 0)
     {
         std::print("Unable to open input streams and/or files\n");
         return SDL_APP_FAILURE;
@@ -852,6 +868,7 @@ int main(int argc, char *argv[])
     //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
     const float IdealMinFrameDurationMs = 16.0f; // Raise this if you have hitching problems.
     const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
+    const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
     const int32_t MinGroupsPerFrame = HistoryGroupsHint;
     const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
 
@@ -913,13 +930,19 @@ int main(int argc, char *argv[])
     int32_t FrameNumber = 0;
     while (!Shutdown)
     {
-        SDL_Event Event;
-        SDL_PollEvent(&Event);
-        if (Event.type == SDL_EVENT_QUIT)
+        int QueuedOutputBytes = 0;
+        do
         {
-            std::print("\nPlayer requested shutdown.\n\n");
-            Shutdown = true;
+            QueuedOutputBytes = SDL_GetAudioStreamQueued(OutStream);
+            SDL_Event Event;
+            SDL_PollEvent(&Event);
+            if (Event.type == SDL_EVENT_QUIT)
+            {
+                std::print("\nPlayer requested shutdown.\n\n");
+                Shutdown = true;
+            }
         }
+        while (!Shutdown && QueuedOutputBytes > TargetBytesPerFrame * 2);
 
         const int32_t Start = FrameNumber * SamplesPerFrame;
         const int32_t Stop = Start + SamplesPerFrame;
@@ -928,13 +951,13 @@ int main(int argc, char *argv[])
         bool PartialFrame = Start < BufferB->ElementCount;
 
         {
-            if (WaveA->Stream == nullptr)
+            if (InStream == nullptr)
             {
                 std::print("\nWhat?!: {}\n", SDL_GetError());
                 break;
             }
 
-            const int32_t BytesReady = int32_t(std::min(SDL_GetAudioStreamAvailable(WaveA->Stream), int(BytesPerFrame)));
+            const int32_t BytesReady = int32_t(std::min(SDL_GetAudioStreamAvailable(InStream), int(BytesPerFrame)));
             if (BytesReady < 0)
             {
                 std::print("\nError preparing to read from input stream: {}\n", SDL_GetError());
@@ -948,7 +971,7 @@ int main(int argc, char *argv[])
 
             if (SamplesReady > 0)
             {
-                const int BytesWritten = SDL_GetAudioStreamData(WaveA->Stream, WriteHead, SamplesReady * sizeof(float));
+                const int BytesWritten = SDL_GetAudioStreamData(InStream, WriteHead, SamplesReady * sizeof(float));
                 if (BytesWritten < 0)
                 {
                     std::print("\nError reading input stream: {}\n", SDL_GetError());
@@ -1138,11 +1161,15 @@ int main(int argc, char *argv[])
     }
 #endif
 
+#if LIVE_STREAM_MODE
+    SDL_DestroyAudioStream(InStream);
+#else
     if (WaveA)
     {
         delete WaveA;
         WaveA = nullptr;
     }
+#endif
 
     if (!Shutdown)
     {
