@@ -922,7 +922,6 @@ int main(int argc, char *argv[])
         {
             std::print("\nUser Requested Quit\n\n");
             Shutdown = true;
-            break;
         }
 
         const int32_t Start = FrameNumber * SamplesPerFrame;
@@ -1020,6 +1019,15 @@ int main(int argc, char *argv[])
         {
             std::print("vkWaitForFences returned an error?\n");
             break;
+        }
+
+        if (Shutdown)
+        {
+            for (int i = 0; i < SizeC; ++i)
+            {
+                const float Alpha = float(SizeC - i - 1) / float(SizeC);
+                BufferC->Mapped[i] *= Alpha;
+            }
         }
 
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
