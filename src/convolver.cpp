@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <cmath>
 
-#define LIVE_STREAM_MODE 1
+#define LIVE_STREAM_MODE 0
 #define BENCHMARKING 1
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
@@ -506,12 +506,13 @@ int main(int argc, char *argv[])
             return SDL_APP_FAILURE;
         }
         SDL_ResumeAudioStreamDevice(InStream);
+        WaveB = WaveData(OutSpec, "revolver.wav");
 #else
         WaveA = new WaveStream(OutSpec, "strange_birds.wav");
         InStream = WaveA->Stream;
+        WaveB = WaveData(OutSpec, "chest.wav");
 #endif
 
-        WaveB = WaveData(OutSpec, "glass.wav");
     }
 
     if (InStream == nullptr || WaveB.Samples.size() == 0)
@@ -974,6 +975,8 @@ int main(int argc, char *argv[])
 #endif
 
 #if 1
+    SDL_SetAudioStreamGain(OutStream, 5.0);
+
     bool Shutdown = false;
     int32_t FrameNumber = 0;
     while (!Shutdown)
