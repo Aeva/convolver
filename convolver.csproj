@@ -26,7 +26,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <CommonShaderArgs>--enhanced-msgs --nan-clamp -V -e main</CommonShaderArgs>
+    <CommonShaderArgs>--target-env spirv1.3 --enhanced-msgs --nan-clamp -V -e main</CommonShaderArgs>
   </PropertyGroup>
 
   <ItemGroup>

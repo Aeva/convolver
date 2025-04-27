@@ -511,7 +511,7 @@ int main(int argc, char *argv[])
         InStream = WaveA->Stream;
 #endif
 
-        WaveB = WaveData(OutSpec, "glass.wav");
+        WaveB = WaveData(OutSpec, "revolver.wav");
     }
 
     if (InStream == nullptr || WaveB.Samples.size() == 0)
@@ -994,7 +994,7 @@ int main(int argc, char *argv[])
 
         const int32_t Start = FrameNumber * SamplesPerFrame;
         const int32_t Stop = Start + SamplesPerFrame;
-        const int32_t GroupsThisFrame = DIV_UP(SamplesPerFrame, GroupSize);
+        const int32_t GroupsThisFrame = SamplesPerFrame;//DIV_UP(SamplesPerFrame, GroupSize);
 
         bool PartialFrame = Start < BufferB->ElementCount;
 
