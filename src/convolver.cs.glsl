@@ -1,7 +1,6 @@
 #version 450
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference2 : require
-#extension GL_KHR_shader_subgroup_basic: require
 #extension GL_KHR_shader_subgroup_arithmetic: require
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
@@ -52,6 +51,8 @@ void main()
             Acc += SampleA * SampleB;
         }
     }
+
+    //subgroupBarrier();
 
     if (subgroupElect())
     {
