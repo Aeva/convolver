@@ -883,13 +883,6 @@ int main(int argc, char *argv[])
         TEARDOWN_FROM_DEVICE();
     }
 
-    std::print("\n");
-    std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(float)) / 1024.0);
-    std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(float)) / 1024.0);
-    std::print("\t     Output frame: {:.2f} KiB\n", double(SizeC * sizeof(float)) / 1024.0);
-    std::print("\n");
-    std::print("\tSamples per frame: {}\n", SamplesPerFrame);
-
     std::print("\nNow entering \"the cool zone\" (hot loop)...\n");
 
     VkFence FrameFence;
@@ -920,14 +913,15 @@ int main(int argc, char *argv[])
         SDL_PollEvent(&Event);
         if (Event.type == SDL_EVENT_QUIT)
         {
-            std::print("\nUser Requested Quit\n\n");
+            std::print("\nPlayer requested shutdown.\n\n");
             Shutdown = true;
         }
 
         const int32_t Start = FrameNumber * SamplesPerFrame;
-        int32_t GroupsThisFrame = DIV_UP(SamplesPerFrame, GroupSize);
+        const int32_t Stop = Start + SamplesPerFrame;
+        const int32_t GroupsThisFrame = DIV_UP(SamplesPerFrame, GroupSize);
 
-        bool PartialFrame = Start < BufferB->ElementCount;
+        bool PartialFrame = Start < BufferB->ElementCount || Stop >= WaveA.Samples.size();
 
         {
             // This is currently guaranteed: (Start % SamplesPerFrame) == 0
@@ -935,7 +929,21 @@ int main(int argc, char *argv[])
             const int WriteStart = (FrameNumber % HistoryPages) * SamplesPerFrame;
             float* WriteHead = BufferA->Mapped + WriteStart;
             float* ReadHead = WaveA.Samples.data() + ReadStart;
-            std::memcpy(WriteHead, ReadHead, sizeof(float) * SamplesPerFrame);
+
+            const int32_t ReadSamples = std::min(SamplesPerFrame, std::max(0, int32_t(WaveA.Samples.size()) - Stop));
+            const int32_t PaddingSamples = SamplesPerFrame - ReadSamples;
+
+            std::memcpy(WriteHead, ReadHead, sizeof(float) * ReadSamples);
+
+            if (PaddingSamples > 0)
+            {
+                PartialFrame = true;
+                const int32_t PaddingStart = WriteStart + ReadSamples;
+                for (int p = 0; p < PaddingSamples; ++p)
+                {
+                    BufferA->Mapped[(PaddingStart + p) % SizeA] = 0.0f;
+                }
+            }
         }
 
 #if BENCHMARKING
@@ -1041,6 +1049,11 @@ int main(int argc, char *argv[])
         {
             std::print("Not enough samples recorded for benchmarking.\n\n");
         }
+
+        std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(float)) / 1024.0);
+        std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(float)) / 1024.0);
+        std::print("\t     Output frame: {:.2f} KiB\n", double(SizeC * sizeof(float)) / 1024.0);
+        std::print("\n");
 
         std::print("\tSamples per frame: {}\n", SamplesPerFrame);
         std::print("\t Groups per frame: {}\n", GroupsPerFrame);
