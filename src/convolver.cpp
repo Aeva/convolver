@@ -16,7 +16,6 @@
 #include <cmath>
 
 #define BENCHMARKING 1
-#define REALTIME_MODE 1
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
 
@@ -284,7 +283,6 @@ struct PushConstantsUpload
     int32_t SizeB;
     int32_t SizeC;
     int32_t Start;
-    int32_t Range;
 };
 
 
@@ -431,8 +429,6 @@ int main(int argc, char *argv[])
         }
         SDL_ResumeAudioStreamDevice(OutStream);
 
-        //WaveA = WaveData(OutSpec, "generations_stereo.wav");
-        //WaveA = WaveData(OutSpec, "castor_pollux_rings_seq.wav");
         WaveA = WaveData(OutSpec, "strange_birds.wav");
         WaveB = WaveData(OutSpec, "chest.wav");
     }
@@ -850,18 +846,11 @@ int main(int argc, char *argv[])
     const int32_t GroupSize = 32;
     const int32_t HistoryGroupsHint = std::min(DIV_UP(int32_t(WaveB.Samples.size()), GroupSize), 1);
 
-#if REALTIME_MODE
-    // Lowest latency
     //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
     const float IdealMinFrameDurationMs = 16.0f; // Raise this if you have hitching problems.
     const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
     const int32_t MinGroupsPerFrame = HistoryGroupsHint;
     const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
-#else
-    // Lowest total time
-    const int32_t MaxGroupsPerFrame = 65535;
-    const int32_t GroupsPerFrame = std::min(int32_t(DIV_UP(WaveA.Samples.size(), GroupSize)), MaxGroupsPerFrame);
-#endif
 
     const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
     const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
@@ -893,6 +882,13 @@ int main(int argc, char *argv[])
         std::print("Failed to allocate `BufferC`\n");
         TEARDOWN_FROM_DEVICE();
     }
+
+    std::print("\n");
+    std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(float)) / 1024.0);
+    std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(float)) / 1024.0);
+    std::print("\t     Output frame: {:.2f} KiB\n", double(SizeC * sizeof(float)) / 1024.0);
+    std::print("\n");
+    std::print("\tSamples per frame: {}\n", SamplesPerFrame);
 
     std::print("\nNow entering \"the cool zone\" (hot loop)...\n");
 
@@ -943,15 +939,6 @@ int main(int argc, char *argv[])
             std::memcpy(WriteHead, ReadHead, sizeof(float) * SamplesPerFrame);
         }
 
-#if 0
-        std::print("\nin: ");
-        for (int ReadCursor = 0; ReadCursor < 8; ++ReadCursor)
-        {
-            std::print("{}, ", BufferA->Mapped[ReadCursor]);
-        }
-        std::print("\n");
-#endif
-
 #if BENCHMARKING
         const auto FrameStartTime = std::chrono::steady_clock::now();
 #endif
@@ -968,8 +955,7 @@ int main(int argc, char *argv[])
                 .SizeA = int32_t(BufferA->ElementCount),
                 .SizeB = int32_t(BufferB->ElementCount),
                 .SizeC = int32_t(BufferC->ElementCount),
-                .Start = Start,
-                .Range = SamplesPerFrame
+                .Start = Start
             };
 
             VkCommandBufferBeginInfo BeginInfo =
@@ -1038,15 +1024,6 @@ int main(int argc, char *argv[])
 
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
         ++FrameNumber;
-
-#if 0
-        std::print("out: ");
-        for (int ReadCursor = 0; ReadCursor < 8; ++ReadCursor)
-        {
-            std::print("{}, ", BufferC->Mapped[ReadCursor]);
-        }
-        std::print("\n");
-#endif
     }
 #endif
 

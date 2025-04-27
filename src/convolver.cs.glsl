@@ -17,8 +17,7 @@ layout(std430, push_constant) uniform PushConstantsBlock
     int SizeA;              // + 4 = 28
     int SizeB;              // + 4 = 32
     int SizeC;              // + 4 = 36
-    int Start;              // + 4 = 40
-    int Range;              // + 4 = 44 bytes
+    int Start;              // + 4 = 40 bytes
 };
 
 
@@ -28,30 +27,18 @@ void main()
     // Application must guarantee the following:
     //  - SizeA is always greater than SizeB, as BufferA must be padded with SizeB zeros.
     //  - SizeA is always greater than or equal to SizeC
-    //  - Stop <= SizeA
     //  - LocalIndex <= SizeC
-    const int Stop = Start + Range;
     const int LocalIndex = int(gl_GlobalInvocationID.x);
     const int Sample = Start + LocalIndex;
-    // More assumptions:
-    //  - SizeC == SamplesPerFrame
-    //  - (Start % SamplesPerFrame) == 0
-    //  - SizeA == SamplesPerFrame * 2
-    //const int FrameNumber = Start % SizeC;
-    //const int FrameReadOffsetA = (FrameNumber % 2) * SizeC;
-    if (Sample < Stop)
-    {
-        float Acc = 0.0f;
-        const int Iterations = min(SizeB, Sample + 1);
-        const int StartA = Sample + 1 - Iterations; // Possible range is 0 to SizeA - Size B, inclusive.
-        const int StartB = SizeB - Iterations; // Possible range is 0 to SizeB - 1, inclusive.
-        for (int i = 0; i < Iterations; ++i)
-        {
-            const float SampleA = BufferA.Data[(StartA + i) % SizeA];
-            const float SampleB = BufferB.Data[StartB + i];
-            Acc += SampleA * SampleB;
-        }
 
-        BufferC.Data[LocalIndex] = Acc;
+    float Acc = 0.0f;
+    const int StartA = Sample - (SizeB - 1);
+    for (int i = 0; i < SizeB; ++i)
+    {
+        const float SampleA = BufferA.Data[(StartA + i) % SizeA];
+        const float SampleB = BufferB.Data[i];
+        Acc += SampleA * SampleB;
     }
+
+    BufferC.Data[LocalIndex] = Acc;
 }
