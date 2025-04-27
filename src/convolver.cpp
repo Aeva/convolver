@@ -437,6 +437,45 @@ int main(int argc, char *argv[])
         SDL_ResumeAudioStreamDevice(OutStream);
 
 #if LIVE_STREAM_MODE
+        SDL_AudioDeviceID RecordingDevice = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
+        {
+            std::set<std::string> PreferredDevices;
+            {
+                PreferredDevices.emplace("MiniFuse 2 Stereo Input 1+2 L/R");
+            }
+
+            int DeviceCount;
+            SDL_AudioDeviceID* AvailableDevices = SDL_GetAudioRecordingDevices(&DeviceCount);
+            int Selection = -1;
+
+            if (DeviceCount > 0)
+            {
+                std::print("\nAvailable recording devices:\n");
+
+                for (int i = 0; i < DeviceCount; ++i)
+                {
+                    std::string DeviceName = SDL_GetAudioDeviceName(AvailableDevices[i]);
+                    if (Selection == -1)
+                    {
+                        if (std::find(PreferredDevices.begin(), PreferredDevices.end(), DeviceName) == PreferredDevices.end())
+                        {
+                            RecordingDevice = AvailableDevices[i];
+                            Selection = i;
+                        }
+                    }
+
+                    if (Selection == i)
+                    {
+                        std::print(" {} SELECTED: {} \n", i, DeviceName);
+                    }
+                    else
+                    {
+                        std::print(" {} : {}\n", i, DeviceName);
+                    }
+                }
+            }
+        }
+
         InStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &OutSpec, nullptr, nullptr);
         if (!InStream)
         {
@@ -449,7 +488,7 @@ int main(int argc, char *argv[])
         InStream = WaveA->Stream;
 #endif
 
-        WaveB = WaveData(OutSpec, "chest.wav");
+        WaveB = WaveData(OutSpec, "bell.wav");
     }
 
     if (InStream == nullptr || WaveB.Samples.size() == 0)
