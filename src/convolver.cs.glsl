@@ -1,6 +1,9 @@
 #version 450
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference2 : require
+#extension GL_KHR_shader_subgroup_arithmetic: require
+
+#define DIV_UP(X, Y) ((X + Y - 1) / Y)
 
 
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer SomeBufferRef
@@ -28,17 +31,32 @@ void main()
     //  - SizeA is always greater than SizeB, as BufferA must be padded with SizeB zeros.
     //  - SizeA is always greater than or equal to SizeC
     //  - LocalIndex <= SizeC
-    const int LocalIndex = int(gl_GlobalInvocationID.x);
-    const int Sample = Start + LocalIndex;
 
-    float Acc = 0.0f;
-    const int StartA = Sample - (SizeB - 1);
-    for (int i = 0; i < SizeB; ++i)
+    const int LaneIndex = int(gl_SubgroupInvocationID);
+    const int GroupIndex = int(gl_WorkGroupID.x);
+    const int Sample = Start + GroupIndex;
+
+    const int Slice = DIV_UP(SizeB, GROUP_SIZE);
+    const int SliceStart = LaneIndex * Slice;
+    const int SliceStop = min(SliceStart + Slice, SizeB);
+
+    float LaneAcc = 0.0f;
+
+    if (SliceStart < SizeB)
     {
-        const float SampleA = BufferA.Data[(StartA + i) % SizeA];
-        const float SampleB = BufferB.Data[i];
-        Acc += SampleA * SampleB;
+        const int StartA = Sample - (SizeB - 1);
+        for (int i = SliceStart; i < SliceStop; ++i)
+        {
+            const float SampleA = BufferA.Data[(StartA + i) % SizeA];
+            const float SampleB = BufferB.Data[i];
+            LaneAcc += SampleA * SampleB;
+        }
     }
 
-    BufferC.Data[LocalIndex] = Acc;
+    const float Total = subgroupAdd(LaneAcc);
+
+    if (subgroupElect())
+    {
+        BufferC.Data[GroupIndex] = Total;
+    }
 }

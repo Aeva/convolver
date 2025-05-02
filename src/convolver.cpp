@@ -412,13 +412,12 @@ int main(int argc, char *argv[])
     const int32_t GroupSize = GROUP_SIZE;
 
     //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
-    const float IdealMinFrameDurationMs = 15.0f; // Raise this if you have hitching problems.
+    const float IdealMinFrameDurationMs = 11.0f; // Raise this if you have hitching problems.
     const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
     const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
     const int32_t MinGroupsPerFrame = 1;
-    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize)));
-
-    const int32_t SamplesPerFrame = GroupSize * GroupsPerFrame;
+    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize))) * GroupSize;
+    const int32_t SamplesPerFrame = GroupsPerFrame;
     const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
     const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
 
@@ -512,7 +511,6 @@ int main(int argc, char *argv[])
         InStream = WaveA->Stream;
         WaveB = WaveData(OutSpec, "chest.wav");
 #endif
-
     }
 
     if (InStream == nullptr || WaveB.Samples.size() == 0)
@@ -1012,7 +1010,6 @@ int main(int argc, char *argv[])
 
         const int32_t Start = FrameNumber * SamplesPerFrame;
         const int32_t Stop = Start + SamplesPerFrame;
-        const int32_t GroupsThisFrame = DIV_UP(SamplesPerFrame, GroupSize);
 
         bool PartialFrame = Start < BufferB->ElementCount;
 
@@ -1087,7 +1084,7 @@ int main(int argc, char *argv[])
             vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
             vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
             vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Upload), &Upload);
-            vkCmdDispatch(CommandBuffer, GroupsThisFrame, 1, 1);
+            vkCmdDispatch(CommandBuffer, GroupsPerFrame, 1, 1);
             vkEndCommandBuffer(CommandBuffer);
         }
 

@@ -26,7 +26,11 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <CommonShaderArgs>--enhanced-msgs --nan-clamp -V -e main -DGROUP_SIZE=8</CommonShaderArgs>
+    <GroupSize>32</GroupSize>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <CommonShaderArgs>--target-env spirv1.3 --enhanced-msgs --nan-clamp -V -e main -DGROUP_SIZE=$(GroupSize)</CommonShaderArgs>
   </PropertyGroup>
 
   <ItemGroup>
@@ -63,7 +67,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <CPlusPlusCompilerArgs>-c -std=c++2c -Wc23-extensions -DGROUP_SIZE=8</CPlusPlusCompilerArgs>
+    <CPlusPlusCompilerArgs>-c -std=c++2c -Wc23-extensions -DGROUP_SIZE=$(GroupSize)</CPlusPlusCompilerArgs>
   </PropertyGroup>
 
   <PropertyGroup>
