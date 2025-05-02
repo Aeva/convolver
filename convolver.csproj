@@ -26,7 +26,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <CommonShaderArgs>--enhanced-msgs --nan-clamp -V -e main</CommonShaderArgs>
+    <CommonShaderArgs>--enhanced-msgs --nan-clamp -V -e main -DGROUP_SIZE=8</CommonShaderArgs>
   </PropertyGroup>
 
   <ItemGroup>
@@ -63,7 +63,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <CPlusPlusCompilerArgs>-c -std=c++2c -Wc23-extensions</CPlusPlusCompilerArgs>
+    <CPlusPlusCompilerArgs>-c -std=c++2c -Wc23-extensions -DGROUP_SIZE=8</CPlusPlusCompilerArgs>
   </PropertyGroup>
 
   <PropertyGroup>
