@@ -21,7 +21,7 @@ layout(std430, push_constant) uniform PushConstantsBlock
 };
 
 
-layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
     // Application must guarantee the following:

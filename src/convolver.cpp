@@ -409,7 +409,7 @@ struct WaveData
 int main(int argc, char *argv[])
 {
     const int SampleRate = 22050;
-    const int32_t GroupSize = 32;
+    const int32_t GroupSize = GROUP_SIZE;
 
     //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
     const float IdealMinFrameDurationMs = 15.0f; // Raise this if you have hitching problems.
@@ -771,9 +771,17 @@ int main(int argc, char *argv[])
             .pQueuePriorities = Priority,
         };
 
+        VkPhysicalDeviceSubgroupSizeControlFeatures SubgroupSizeControlFeatures =
+        {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
+            .pNext = nullptr,
+            .subgroupSizeControl = VK_TRUE,
+            .computeFullSubgroups = VK_FALSE,
+        };
+
         VkPhysicalDeviceVulkan12Features PhysicalDeviceVulkan12Features = {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-            .pNext = nullptr,
+            .pNext = &SubgroupSizeControlFeatures,
             .shaderFloat16 = VK_TRUE,
             .shaderStorageBufferArrayNonUniformIndexing = VK_TRUE,
             .bufferDeviceAddress = VK_TRUE
@@ -857,6 +865,13 @@ int main(int argc, char *argv[])
         }
 
         {
+            VkPipelineShaderStageRequiredSubgroupSizeCreateInfo RequiredSubgroupSizeCreateInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+                .pNext = nullptr,
+                .requiredSubgroupSize = GroupSize,
+            };
+
             VkComputePipelineCreateInfo CreateInfo =
             {
                 .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -865,7 +880,7 @@ int main(int argc, char *argv[])
                 .stage =
                 {
                     .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                    .pNext = nullptr,
+                    .pNext = &RequiredSubgroupSizeCreateInfo,
                     .flags = 0,
                     .stage = VK_SHADER_STAGE_COMPUTE_BIT,
                     .module = ShaderModule,
