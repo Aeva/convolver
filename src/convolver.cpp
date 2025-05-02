@@ -427,7 +427,7 @@ int main(int argc, char *argv[])
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_ROLE, "Magic");
 
     //SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "alsa");
-    //SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, SampleFramesHintStr.c_str());
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, SampleFramesHintStr.c_str());
 
     if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS))
     {
@@ -456,7 +456,6 @@ int main(int argc, char *argv[])
             std::print("Could not create output audio stream: {}", SDL_GetError());
             return SDL_APP_FAILURE;
         }
-        SDL_ResumeAudioStreamDevice(OutStream);
 
 #if LIVE_STREAM_MODE
         SDL_AudioDeviceID RecordingDevice = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
@@ -504,7 +503,6 @@ int main(int argc, char *argv[])
             std::print("Could not create input audio stream: {}", SDL_GetError());
             return SDL_APP_FAILURE;
         }
-        SDL_ResumeAudioStreamDevice(InStream);
         WaveB = WaveData(OutSpec, "revolver.wav");
 #else
         WaveA = new WaveStream(OutSpec, "strange_birds.wav");
@@ -988,16 +986,14 @@ int main(int argc, char *argv[])
 #endif
 
 #if 1
-    SDL_SetAudioStreamGain(OutStream, 5.0);
+    SDL_ResumeAudioStreamDevice(InStream);
+    SDL_SetAudioStreamGain(OutStream, 6.0);
 
     bool Shutdown = false;
     int32_t FrameNumber = 0;
     while (!Shutdown)
     {
-        int QueuedOutputBytes = 0;
-        do
         {
-            QueuedOutputBytes = SDL_GetAudioStreamQueued(OutStream);
             SDL_Event Event;
             SDL_PollEvent(&Event);
             if (Event.type == SDL_EVENT_QUIT)
@@ -1006,7 +1002,20 @@ int main(int argc, char *argv[])
                 Shutdown = true;
             }
         }
-        while (!Shutdown && QueuedOutputBytes > TargetBytesPerFrame * 2);
+
+#if LIVE_STREAM_MODE
+        const int32_t AvailableInputBytes = SDL_GetAudioStreamAvailable(InStream);
+        if (AvailableInputBytes < BytesPerFrame)
+#else
+        const int QueuedOutputBytes = SDL_GetAudioStreamQueued(OutStream);
+        if (QueuedOutputBytes > TargetBytesPerFrame * 4) // can go as low as * 2
+#endif
+        {
+#if LIVE_STREAM_MODE
+            SDL_FlushAudioStream(InStream);
+#endif
+            continue;
+        }
 
         const int32_t Start = FrameNumber * SamplesPerFrame;
         const int32_t Stop = Start + SamplesPerFrame;
@@ -1026,6 +1035,7 @@ int main(int argc, char *argv[])
                 std::print("\nError preparing to read from input stream: {}\n", SDL_GetError());
                 break;
             }
+            while (BytesReady < BytesPerFrame);
             const int32_t SamplesReady = BytesReady / sizeof(float);
 
             // This is currently guaranteed: (Start % SamplesPerFrame) == 0
@@ -1148,6 +1158,10 @@ int main(int argc, char *argv[])
         }
 
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
+        SDL_ResumeAudioStreamDevice(OutStream);
+#if LIVE_STREAM_MODE
+        SDL_FlushAudioStream(OutStream);
+#endif
         ++FrameNumber;
     }
 #endif
