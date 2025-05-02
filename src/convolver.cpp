@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <cmath>
 
-#define LIVE_STREAM_MODE 0
+#define LIVE_STREAM_MODE 1
 #define BENCHMARKING 1
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
@@ -426,7 +426,7 @@ int main(int argc, char *argv[])
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_NAME, "Convolver");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_ROLE, "Magic");
 
-    //SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "alsa");
+    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "alsa");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, SampleFramesHintStr.c_str());
 
     if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS))
@@ -1004,6 +1004,7 @@ int main(int argc, char *argv[])
         }
 
 #if LIVE_STREAM_MODE
+        SDL_FlushAudioStream(InStream);
         const int32_t AvailableInputBytes = SDL_GetAudioStreamAvailable(InStream);
         if (AvailableInputBytes < BytesPerFrame)
 #else
@@ -1011,9 +1012,6 @@ int main(int argc, char *argv[])
         if (QueuedOutputBytes > TargetBytesPerFrame * 4) // can go as low as * 2
 #endif
         {
-#if LIVE_STREAM_MODE
-            SDL_FlushAudioStream(InStream);
-#endif
             continue;
         }
 
@@ -1157,11 +1155,11 @@ int main(int argc, char *argv[])
             }
         }
 
-        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
-        SDL_ResumeAudioStreamDevice(OutStream);
 #if LIVE_STREAM_MODE
         SDL_FlushAudioStream(OutStream);
 #endif
+        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
+        SDL_ResumeAudioStreamDevice(OutStream);
         ++FrameNumber;
     }
 #endif
