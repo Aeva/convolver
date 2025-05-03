@@ -426,7 +426,7 @@ int main(int argc, char *argv[])
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_NAME, "Convolver");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_ROLE, "Magic");
 
-    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "alsa");
+    //SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "alsa");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, SampleFramesHintStr.c_str());
 
     if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS))
@@ -675,14 +675,17 @@ int main(int argc, char *argv[])
             {
                 if (Properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
                 {
+                    // Matches integrated GPUs.
                     Candidate.Score = 0;
                 }
                 else if (Properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU)
                 {
+                    // Matches LLVM PIPE and similar.
                     Candidate.Score = 1;
                 }
                 else
                 {
+                    // Matches discrete GPUs and more exotic things.
                     Candidate.Score = 2;
                 }
 
@@ -716,7 +719,7 @@ int main(int argc, char *argv[])
             {
                 std::print(" {}~ (Adequate) {}{}\n", FG(240), DeviceInfo.Name, ANSI_RESET);
             }
-            else if (DeviceInfo.Score <= 1)
+            else
             {
                 std::print(" {}- (Rejected) {}{}\n", FG(240), DeviceInfo.Name, ANSI_RESET);
             }
@@ -1004,7 +1007,7 @@ int main(int argc, char *argv[])
         }
 
 #if LIVE_STREAM_MODE
-        SDL_FlushAudioStream(InStream);
+        //SDL_FlushAudioStream(InStream);
         const int32_t AvailableInputBytes = SDL_GetAudioStreamAvailable(InStream);
         if (AvailableInputBytes < BytesPerFrame)
 #else
@@ -1156,7 +1159,7 @@ int main(int argc, char *argv[])
         }
 
 #if LIVE_STREAM_MODE
-        SDL_FlushAudioStream(OutStream);
+        //SDL_FlushAudioStream(OutStream);
 #endif
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
         SDL_ResumeAudioStreamDevice(OutStream);
