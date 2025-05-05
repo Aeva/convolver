@@ -441,123 +441,156 @@ struct WaveData
 
 
 
+struct FilterRealTimeThread
+{
+    void SetupPorts(pw_filter* Filter)
+    {
+        InPort = pw_filter_add_port(
+            Filter,
+            PW_DIRECTION_INPUT,
+            PW_FILTER_PORT_FLAG_MAP_BUFFERS,
+            sizeof(FilterRealTimeThread),
+            pw_properties_new(
+                PW_KEY_FORMAT_DSP, "32 bit float mono audio",
+                PW_KEY_PORT_NAME, "input",
+                nullptr),
+            nullptr, 0);
+
+        OutPort = pw_filter_add_port(
+            Filter,
+            PW_DIRECTION_OUTPUT,
+            PW_FILTER_PORT_FLAG_MAP_BUFFERS,
+            sizeof(FilterRealTimeThread),
+            pw_properties_new(
+                PW_KEY_FORMAT_DSP, "32 bit float mono audio",
+                PW_KEY_PORT_NAME, "output",
+                nullptr),
+            nullptr, 0);
+    }
+
+    static void OnProcess(void *UserData, spa_io_position* Position)
+    {
+        FilterRealTimeThread* Data = (FilterRealTimeThread*)UserData;
+        Data->OnProcessInner(*Position);
+    }
+
+private:
+    void* InPort = nullptr;
+    void* OutPort = nullptr;
+
+    void OnProcessInner(const spa_io_position& Position)
+    {
+        uint32_t Count = Position.clock.duration;
+
+        pw_log_trace("do process %d", Count);
+
+        float* In = (float*)pw_filter_get_dsp_buffer(InPort, Count);
+        float* Out = (float*)pw_filter_get_dsp_buffer(OutPort, Count);
+
+        if (In && Out)
+        {
+            memcpy(Out, In, Count * sizeof(float));
+        }
+    }
+};
 
 
+const pw_filter_events FilterEvents =
+{
+    .version = PW_VERSION_FILTER_EVENTS,
+    .process = FilterRealTimeThread::OnProcess,
+};
 
 
 struct FilterSession
 {
     pw_main_loop* Loop = nullptr;
     pw_filter* Filter = nullptr;
-    void* InPort = nullptr;
-    void* OutPort = nullptr;
-};
+    FilterRealTimeThread RealTimeThread;
 
-static void OnProcess(void *UserData, spa_io_position* Position)
-{
-    FilterSession* Data = (FilterSession*)UserData;
-    uint32_t Count = Position->clock.duration;
-
-    pw_log_trace("do process %d", Count);
-
-    float* In = (float*)pw_filter_get_dsp_buffer(Data->InPort, Count);
-    float* Out = (float*)pw_filter_get_dsp_buffer(Data->OutPort, Count);
-
-    if (In && Out)
+    static void OnQuit(void *UserData, int Signal)
     {
-        memcpy(Out, In, Count * sizeof(float));
+        FilterSession* Data = (FilterSession*)UserData;
+        pw_main_loop_quit(Data->Loop);
     }
-}
 
-const pw_filter_events FilterEvents =
-{
-    .version = PW_VERSION_FILTER_EVENTS,
-    .process = OnProcess,
-};
-
-static void OnQuit(void *UserData, int Signal)
-{
-    FilterSession* Data = (FilterSession*)UserData;
-    pw_main_loop_quit(Data->Loop);
-}
-
-
-int FilterDemo()
-{
-    FilterSession Data;
-    std::vector<const spa_pod*> Params;
-
-    uint8_t BuilderBuffer[1024];
-    spa_pod_builder PodBuilder = SPA_POD_BUILDER_INIT(BuilderBuffer, sizeof(BuilderBuffer));
-
-    Data.Loop = pw_main_loop_new(nullptr);
-
-    pw_loop_add_signal(pw_main_loop_get_loop(Data.Loop), SIGINT, OnQuit, &Data);
-    pw_loop_add_signal(pw_main_loop_get_loop(Data.Loop), SIGTERM, OnQuit, &Data);
-
-    Data.Filter = pw_filter_new_simple(
-        pw_main_loop_get_loop(Data.Loop),
-        "convolver",
-        pw_properties_new(
-            PW_KEY_MEDIA_TYPE, "Audio",
-            PW_KEY_MEDIA_CATEGORY, "Filter",
-            PW_KEY_MEDIA_ROLE, "DSP",
-            nullptr),
-        &FilterEvents,
-        &Data);
-
-    Data.InPort = pw_filter_add_port(
-        Data.Filter,
-        PW_DIRECTION_INPUT,
-        PW_FILTER_PORT_FLAG_MAP_BUFFERS,
-        sizeof(FilterSession),
-        pw_properties_new(
-            PW_KEY_FORMAT_DSP, "32 bit float mono audio",
-            PW_KEY_PORT_NAME, "input",
-            nullptr),
-        nullptr, 0);
-
-    Data.OutPort = pw_filter_add_port(
-        Data.Filter,
-        PW_DIRECTION_OUTPUT,
-        PW_FILTER_PORT_FLAG_MAP_BUFFERS,
-        sizeof(FilterSession),
-        pw_properties_new(
-            PW_KEY_FORMAT_DSP, "32 bit float mono audio",
-            PW_KEY_PORT_NAME, "output",
-            nullptr),
-        nullptr, 0);
-
+    FilterSession()
     {
-        spa_process_latency_info ProcessLatencyInfo =
+        std::vector<const spa_pod*> Params;
+
+        uint8_t BuilderBuffer[1024];
+        spa_pod_builder PodBuilder = SPA_POD_BUILDER_INIT(BuilderBuffer, sizeof(BuilderBuffer));
+
+        Loop = pw_main_loop_new(nullptr);
+
+        pw_loop_add_signal(pw_main_loop_get_loop(Loop), SIGINT, FilterSession::OnQuit, this);
+        pw_loop_add_signal(pw_main_loop_get_loop(Loop), SIGTERM, FilterSession::OnQuit, this);
+
+        Filter = pw_filter_new_simple(
+            pw_main_loop_get_loop(Loop),
+            "convolver",
+            pw_properties_new(
+                PW_KEY_MEDIA_TYPE, "Audio",
+                PW_KEY_MEDIA_CATEGORY, "Filter",
+                PW_KEY_MEDIA_ROLE, "DSP",
+                nullptr),
+            &FilterEvents,
+            &RealTimeThread);
+
+        RealTimeThread.SetupPorts(Filter);
+
         {
-            .ns = 10 * SPA_NSEC_PER_MSEC
-        };
-        Params.push_back(spa_process_latency_build( &PodBuilder, SPA_PARAM_ProcessLatency, &ProcessLatencyInfo));
-    }
+            spa_process_latency_info ProcessLatencyInfo =
+            {
+                .ns = 10 * SPA_NSEC_PER_MSEC
+            };
+            Params.push_back(spa_process_latency_build( &PodBuilder, SPA_PARAM_ProcessLatency, &ProcessLatencyInfo));
+        }
 
-    {
-        spa_audio_info_raw StreamFormat =
         {
-            .format = SPA_AUDIO_FORMAT_DSP_F32,
-            .rate = SampleRate,
-            .channels = 1
-        };
-        Params.push_back(spa_format_audio_raw_build(&PodBuilder, SPA_PARAM_EnumFormat, &StreamFormat));
+            spa_audio_info_raw StreamFormat =
+            {
+                .format = SPA_AUDIO_FORMAT_DSP_F32,
+                .rate = SampleRate,
+                .channels = 1
+            };
+            Params.push_back(spa_format_audio_raw_build(&PodBuilder, SPA_PARAM_EnumFormat, &StreamFormat));
+        }
+
+        if (pw_filter_connect(Filter, PW_FILTER_FLAG_RT_PROCESS, Params.data(), Params.size()) < 0)
+        {
+            std::print("Can't connect?\n");
+            Reset();
+        }
     }
 
+    void Run()
+    {
+        if (Loop && Filter)
+        {
+            pw_main_loop_run(Loop);
+        }
+    }
 
-    if (pw_filter_connect(Data.Filter, PW_FILTER_FLAG_RT_PROCESS, Params.data(), Params.size()) < 0)
+    void Reset()
     {
-        std::print("Can't connect?\n");
+        if (Filter)
+        {
+            pw_filter_destroy(Filter);
+            Filter = nullptr;
+        }
+        if (Loop)
+        {
+            pw_main_loop_destroy(Loop);
+            Loop = nullptr;
+        }
     }
-    else
+
+    ~FilterSession()
     {
-        pw_main_loop_run(Data.Loop);
-        pw_filter_destroy(Data.Filter);
-        pw_main_loop_destroy(Data.Loop);
+        Reset();
     }
-}
+};
 
 
 
@@ -565,8 +598,11 @@ int main(int argc, char *argv[])
 {
     {
         pw_init(&argc, &argv);
-
-        FilterDemo();
+        {
+            FilterSession Session;
+            Session.Run();
+            Session.Reset();
+        }
         pw_deinit();
         return 0;
     }
