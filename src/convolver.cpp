@@ -1,7 +1,18 @@
 
+#define LIVE_STREAM_MODE 1
+#define BENCHMARKING 1
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_events.h>
+
+#if LIVE_STREAM_MODE
+    #include <spa/pod/builder.h>
+    #include <spa/param/latency-utils.h>
+    #include <spa/param/audio/format-utils.h>
+    #include <pipewire/filter.h>
+    #include <pipewire/pipewire.h>
+#endif
 
 #include <vulkan/vulkan.h>
 #include <print>
@@ -15,10 +26,21 @@
 #include <algorithm>
 #include <cmath>
 
-#define LIVE_STREAM_MODE 1
-#define BENCHMARKING 1
-
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
+
+const int SampleRate = 48000;
+const int32_t GroupSize = GROUP_SIZE;
+
+//const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
+const float IdealMinFrameDurationMs = 11.0f; // Raise this if you have hitching problems.
+const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
+const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
+const int32_t MinGroupsPerFrame = 1;
+const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize))) * GroupSize;
+const int32_t SamplesPerFrame = GroupsPerFrame;
+const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
+const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
+
 
 const char ConvolverShaderSource[] = {
 #embed "convolver.cs.spirv"
@@ -406,20 +428,165 @@ struct WaveData
 };
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+struct FilterSession
+{
+    pw_main_loop* Loop = nullptr;
+    pw_filter* Filter = nullptr;
+    void* InPort = nullptr;
+    void* OutPort = nullptr;
+};
+
+static void OnProcess(void *UserData, spa_io_position* Position)
+{
+    FilterSession* Data = (FilterSession*)UserData;
+    uint32_t Count = Position->clock.duration;
+
+    pw_log_trace("do process %d", Count);
+
+    float* In = (float*)pw_filter_get_dsp_buffer(Data->InPort, Count);
+    float* Out = (float*)pw_filter_get_dsp_buffer(Data->OutPort, Count);
+
+    if (In && Out)
+    {
+        memcpy(Out, In, Count * sizeof(float));
+    }
+}
+
+const pw_filter_events FilterEvents =
+{
+    .version = PW_VERSION_FILTER_EVENTS,
+    .process = OnProcess,
+};
+
+static void OnQuit(void *UserData, int Signal)
+{
+    FilterSession* Data = (FilterSession*)UserData;
+    pw_main_loop_quit(Data->Loop);
+}
+
+
+int FilterDemo()
+{
+    FilterSession Data;
+    std::vector<const spa_pod*> Params;
+
+    uint8_t BuilderBuffer[1024];
+    spa_pod_builder PodBuilder = SPA_POD_BUILDER_INIT(BuilderBuffer, sizeof(BuilderBuffer));
+
+    Data.Loop = pw_main_loop_new(nullptr);
+
+    pw_loop_add_signal(pw_main_loop_get_loop(Data.Loop), SIGINT, OnQuit, &Data);
+    pw_loop_add_signal(pw_main_loop_get_loop(Data.Loop), SIGTERM, OnQuit, &Data);
+
+    Data.Filter = pw_filter_new_simple(
+        pw_main_loop_get_loop(Data.Loop),
+        "convolver",
+        pw_properties_new(
+            PW_KEY_MEDIA_TYPE, "Audio",
+            PW_KEY_MEDIA_CATEGORY, "Filter",
+            PW_KEY_MEDIA_ROLE, "DSP",
+            nullptr),
+        &FilterEvents,
+        &Data);
+
+    Data.InPort = pw_filter_add_port(
+        Data.Filter,
+        PW_DIRECTION_INPUT,
+        PW_FILTER_PORT_FLAG_MAP_BUFFERS,
+        sizeof(FilterSession),
+        pw_properties_new(
+            PW_KEY_FORMAT_DSP, "32 bit float mono audio",
+            PW_KEY_PORT_NAME, "input",
+            nullptr),
+        nullptr, 0);
+
+    Data.OutPort = pw_filter_add_port(
+        Data.Filter,
+        PW_DIRECTION_OUTPUT,
+        PW_FILTER_PORT_FLAG_MAP_BUFFERS,
+        sizeof(FilterSession),
+        pw_properties_new(
+            PW_KEY_FORMAT_DSP, "32 bit float mono audio",
+            PW_KEY_PORT_NAME, "output",
+            nullptr),
+        nullptr, 0);
+
+    {
+        spa_process_latency_info ProcessLatencyInfo =
+        {
+            .ns = 10 * SPA_NSEC_PER_MSEC
+        };
+        Params.push_back(spa_process_latency_build( &PodBuilder, SPA_PARAM_ProcessLatency, &ProcessLatencyInfo));
+    }
+
+    {
+        spa_audio_info_raw StreamFormat =
+        {
+            .format = SPA_AUDIO_FORMAT_DSP_F32,
+            .rate = SampleRate,
+            .channels = 1
+        };
+        Params.push_back(spa_format_audio_raw_build(&PodBuilder, SPA_PARAM_EnumFormat, &StreamFormat));
+    }
+
+
+    if (pw_filter_connect(Data.Filter, PW_FILTER_FLAG_RT_PROCESS, Params.data(), Params.size()) < 0)
+    {
+        std::print("Can't connect?\n");
+    }
+    else
+    {
+        pw_main_loop_run(Data.Loop);
+        pw_filter_destroy(Data.Filter);
+        pw_main_loop_destroy(Data.Loop);
+    }
+}
+
+
+
 int main(int argc, char *argv[])
 {
-    const int SampleRate = 22050;
-    const int32_t GroupSize = GROUP_SIZE;
+    {
+        pw_init(&argc, &argv);
 
-    //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
-    const float IdealMinFrameDurationMs = 11.0f; // Raise this if you have hitching problems.
-    const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
-    const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
-    const int32_t MinGroupsPerFrame = 1;
-    const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize))) * GroupSize;
-    const int32_t SamplesPerFrame = GroupsPerFrame;
-    const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
-    const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
+        FilterDemo();
+        pw_deinit();
+        return 0;
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     const std::string SampleFramesHintStr = std::format("{}", BytesPerFrame);
 

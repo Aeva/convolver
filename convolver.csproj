@@ -67,11 +67,11 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <CPlusPlusCompilerArgs>-c -std=c++2c -Wc23-extensions -DGROUP_SIZE=$(GroupSize)</CPlusPlusCompilerArgs>
+    <CPlusPlusCompilerArgs>-c -std=c++2c -Wc23-extensions -DGROUP_SIZE=$(GroupSize) -I/usr/include/pipewire-0.3 -I/usr/include/spa-0.2</CPlusPlusCompilerArgs>
   </PropertyGroup>
 
   <PropertyGroup>
-    <CPlusPlusLinkerArgs>-std=c++2c -lvulkan -lasound -lSDL3</CPlusPlusLinkerArgs>
+    <CPlusPlusLinkerArgs>-std=c++2c -lvulkan -lasound -lSDL3 -lpipewire-0.3</CPlusPlusLinkerArgs>
   </PropertyGroup>
 
   <ItemGroup>
