@@ -430,10 +430,36 @@ struct WaveData
 };
 
 
+struct ThreadShared
+{
+    std::atomic_size_t InReady = 0;
+    std::atomic_size_t InProcessed = 0;
+
+    std::atomic_size_t OutReady = 0;
+    std::atomic_size_t OutWritten = 0;
+
+    float* InSamples = nullptr;
+    float* OutSamples = nullptr;
+
+    size_t InSampleCount = 0;
+    size_t OutSampleCount = 0;
+
+    ThreadShared(SharedMemory<float>* BufferA, SharedMemory<float>* BufferC)
+    {
+        InSamples = BufferA->Mapped;
+        OutSamples = BufferC->Mapped;
+        InSampleCount = BufferA->ElementCount;
+        OutSampleCount = BufferC->ElementCount;
+    }
+};
+
+
 struct FilterRealTimeThread
 {
-    void SetupPorts(pw_filter* Filter)
+    void SetupPorts(ThreadShared* InBufferState, pw_filter* Filter)
     {
+        BufferState = InBufferState;
+
         InPort = pw_filter_add_port(
             Filter,
             PW_DIRECTION_INPUT,
@@ -466,19 +492,65 @@ struct FilterRealTimeThread
 private:
     void* InPort = nullptr;
     void* OutPort = nullptr;
+    ThreadShared* BufferState;
 
     void OnProcessInner(const spa_io_position& Position)
     {
-        uint32_t Count = Position.clock.duration;
-
-        pw_log_trace("do process %d", Count);
+        const size_t Count = Position.clock.duration;
 
         float* In = (float*)pw_filter_get_dsp_buffer(InPort, Count);
         float* Out = (float*)pw_filter_get_dsp_buffer(OutPort, Count);
 
-        if (In && Out)
+        if (In)
         {
-            memcpy(Out, In, Count * sizeof(float));
+            const size_t InSampleCount = BufferState->InSampleCount;
+            size_t ReadStart = 0;
+            size_t WriteStart = BufferState->InReady.load();
+
+            while (ReadStart < Count)
+            {
+                size_t MaxWrite = InSampleCount - WriteStart;
+                size_t WriteCount = std::min(Count, MaxWrite);
+
+                float* ReadHead = In + ReadStart;
+                float* WriteHead = BufferState->InSamples + (WriteStart % InSampleCount);
+                memcpy(WriteHead, ReadHead, WriteCount * sizeof(float));
+                ReadStart += WriteCount;
+                WriteStart += WriteCount;
+            }
+
+            BufferState->InReady += Count;
+        }
+
+        if (Out)
+        {
+            const size_t OutSampleCount = BufferState->OutSampleCount;
+            const size_t OutReady = BufferState->OutReady.load();
+            const size_t OutWritten = BufferState->OutWritten.load();
+            const size_t Pending = OutReady - OutWritten;
+            const size_t MuteStart = Pending;
+            const size_t MuteCount = Count - Pending;
+            size_t ReadStart = BufferState->OutReady.load();
+            size_t WriteStart = 0;
+
+            while (WriteStart < Pending)
+            {
+                size_t MaxRead = OutSampleCount - ReadStart;
+                size_t ReadCount = std::min(Pending, MaxRead);
+
+                float* WriteHead = Out + WriteStart;
+                float* ReadHead = BufferState->OutSamples + (ReadStart % OutSampleCount);
+                memcpy(WriteHead, ReadHead, ReadCount * sizeof(float));
+                WriteStart += ReadCount;
+                ReadStart += ReadCount;
+            }
+
+            BufferState->OutWritten += Pending;
+
+            for (int i = 0; i < MuteCount; ++i)
+            {
+                Out[MuteStart + i] = 0.0f;
+            }
         }
     }
 };
@@ -497,7 +569,7 @@ struct PipeWireFilter
         Data->Live.store(false);
     }
 
-    PipeWireFilter()
+    PipeWireFilter(ThreadShared* BufferState)
     {
         std::vector<const spa_pod*> Params;
 
@@ -527,14 +599,14 @@ struct PipeWireFilter
             &FilterEvents,
             &RealTimeThread);
 
-        RealTimeThread.SetupPorts(Filter);
+        RealTimeThread.SetupPorts(BufferState, Filter);
 
         {
             spa_process_latency_info ProcessLatencyInfo =
             {
                 .ns = 10 * SPA_NSEC_PER_MSEC
             };
-            Params.push_back(spa_process_latency_build( &PodBuilder, SPA_PARAM_ProcessLatency, &ProcessLatencyInfo));
+            Params.push_back(spa_process_latency_build(&PodBuilder, SPA_PARAM_ProcessLatency, &ProcessLatencyInfo));
         }
 
         {
@@ -1123,7 +1195,7 @@ int main(int argc, char *argv[])
     const int32_t SizeC = SamplesPerFrame;
 
     // History pages needs to be long enough to prevent overlap in the ring buffer between live convolution ranges.
-    const int32_t HistoryPages = DIV_UP(SizeB * 2, SizeC);
+    const int32_t HistoryPages = std::max(DIV_UP(SizeB * 2, SizeC), 5);
     const int32_t UploadPages = 1;
     const int32_t SizeA = SamplesPerFrame * (UploadPages + HistoryPages);
 
@@ -1172,8 +1244,11 @@ int main(int argc, char *argv[])
     SDL_ResumeAudioStreamDevice(InStream);
     SDL_SetAudioStreamGain(OutStream, 6.0);
 
-    PipeWireFilter PipeWireSession;
+#if LIVE_STREAM_MODE
+    ThreadShared BufferState = ThreadShared(BufferA, BufferC);
+    PipeWireFilter PipeWireSession(&BufferState);
     PipeWireSession.Run();
+#endif
 
     bool Shutdown = false;
     int32_t FrameNumber = 0;
@@ -1190,22 +1265,33 @@ int main(int argc, char *argv[])
         }
 
 #if LIVE_STREAM_MODE
-        //SDL_FlushAudioStream(InStream);
-        const int32_t AvailableInputBytes = SDL_GetAudioStreamAvailable(InStream);
-        if (AvailableInputBytes < BytesPerFrame)
+        {
+            const size_t InReady = BufferState.InReady.load();
+            const size_t InProcessed = BufferState.InProcessed.load();
+            const size_t InPending = InReady - InProcessed;
+            if (InPending < SamplesPerFrame)
+            {
+                continue;
+            }
+            else
+            {
+                BufferState.InProcessed += SamplesPerFrame;
+            }
+        }
 #else
         const int QueuedOutputBytes = SDL_GetAudioStreamQueued(OutStream);
         if (QueuedOutputBytes > TargetBytesPerFrame * 4) // can go as low as * 2
-#endif
         {
             continue;
         }
+#endif
 
         const int32_t Start = FrameNumber * SamplesPerFrame;
         const int32_t Stop = Start + SamplesPerFrame;
 
         bool PartialFrame = Start < BufferB->ElementCount;
 
+#if !LIVE_STREAM_MODE
         {
             if (InStream == nullptr)
             {
@@ -1248,6 +1334,7 @@ int main(int argc, char *argv[])
                 }
             }
         }
+#endif
 
 #if BENCHMARKING
         const auto FrameStartTime = std::chrono::steady_clock::now();
@@ -1301,6 +1388,9 @@ int main(int argc, char *argv[])
         {
             Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
         }
+#if LIVE_STREAM_MODE
+        BufferState.OutReady += SamplesPerFrame;
+#endif
 
 #if BENCHMARKING
         if (!PartialFrame)
@@ -1341,11 +1431,10 @@ int main(int argc, char *argv[])
             }
         }
 
-#if LIVE_STREAM_MODE
-        //SDL_FlushAudioStream(OutStream);
-#endif
+#if !LIVE_STREAM_MODE
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
         SDL_ResumeAudioStreamDevice(OutStream);
+#endif
         ++FrameNumber;
     }
 #endif
