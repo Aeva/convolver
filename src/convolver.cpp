@@ -501,56 +501,102 @@ private:
         float* In = (float*)pw_filter_get_dsp_buffer(InPort, Count);
         float* Out = (float*)pw_filter_get_dsp_buffer(OutPort, Count);
 
-        if (In)
+        const size_t PrecedingInReady = BufferState->InReady.load();
+        const size_t PrecedingInProcessed = BufferState->InProcessed.load();
+        const size_t PrecedingOutReady = BufferState->OutReady.load();
+        const size_t PrecedingOutWritten = BufferState->OutWritten.load();
+
+
+        float StartingInReady = float(PrecedingInReady) / SamplesPerFrame;
+        float StartingInProcessed = float(PrecedingInProcessed) / SamplesPerFrame;
+        float StartingOutReady = float(PrecedingOutReady) / SamplesPerFrame;
+        float StartingOutWritten = float(PrecedingOutWritten) / SamplesPerFrame;
+
+        if (In && Out)
         {
-            const size_t InSampleCount = BufferState->InSampleCount;
-            size_t ReadStart = 0;
-            size_t WriteStart = BufferState->InReady.load();
-
-            while (ReadStart < Count)
             {
-                size_t MaxWrite = InSampleCount - WriteStart;
-                size_t WriteCount = std::min(Count, MaxWrite);
+                const size_t InSampleCount = BufferState->InSampleCount;
+                size_t ReadStart = 0;
+                size_t WriteStart = PrecedingInReady;
 
-                float* ReadHead = In + ReadStart;
-                float* WriteHead = BufferState->InSamples + (WriteStart % InSampleCount);
-                memcpy(WriteHead, ReadHead, WriteCount * sizeof(float));
-                ReadStart += WriteCount;
-                WriteStart += WriteCount;
+                while (ReadStart < Count)
+                {
+                    size_t MaxWrite = InSampleCount - (WriteStart % InSampleCount);
+                    size_t WriteCount = std::min(Count, MaxWrite);
+
+                    float* ReadHead = In + ReadStart;
+                    float* WriteHead = BufferState->InSamples + (WriteStart % InSampleCount);
+                    memcpy(WriteHead, ReadHead, WriteCount * sizeof(float));
+                    ReadStart += WriteCount;
+                    WriteStart += WriteCount;
+
+                    if (WriteCount <= 0)
+                    {
+                        std::print("in inf loop!!\n");
+                        std::print("ir {} ip {} or {} ow {}\n",
+                                   StartingInReady, StartingInProcessed, StartingOutReady, StartingOutWritten);
+                        std::print("{} {} {}\n\n", InSampleCount, WriteStart, WriteCount);
+
+                        break;
+                    }
+                }
+
+                BufferState->InReady += Count;
             }
 
-            BufferState->InReady += Count;
-        }
-
-        if (Out)
-        {
-            const size_t OutSampleCount = BufferState->OutSampleCount;
-            const size_t OutReady = BufferState->OutReady.load();
-            const size_t OutWritten = BufferState->OutWritten.load();
-            const size_t Pending = OutReady - OutWritten;
-            const size_t MuteStart = Pending;
-            const size_t MuteCount = Count - Pending;
-            size_t ReadStart = BufferState->OutReady.load();
-            size_t WriteStart = 0;
-
-            while (WriteStart < Pending)
             {
-                size_t MaxRead = OutSampleCount - ReadStart;
-                size_t ReadCount = std::min(Pending, MaxRead);
+                const size_t OutSampleCount = BufferState->OutSampleCount;
+                const size_t Pending = std::min(PrecedingOutReady - PrecedingOutWritten, Count);
+                const size_t MuteStart = Pending;
+                const size_t MuteCount = Count - Pending;
+                size_t ReadStart = PrecedingOutReady;
+                size_t WriteStart = 0;
 
-                float* WriteHead = Out + WriteStart;
-                float* ReadHead = BufferState->OutSamples + (ReadStart % OutSampleCount);
-                memcpy(WriteHead, ReadHead, ReadCount * sizeof(float));
-                WriteStart += ReadCount;
-                ReadStart += ReadCount;
+                while (WriteStart < Pending)
+                {
+                    size_t MaxRead = OutSampleCount - (ReadStart % OutSampleCount);
+                    size_t ReadCount = std::min(Pending, MaxRead);
+
+                    float* WriteHead = Out + WriteStart;
+                    float* ReadHead = BufferState->OutSamples + (ReadStart % OutSampleCount);
+                    memcpy(WriteHead, ReadHead, ReadCount * sizeof(float));
+                    WriteStart += ReadCount;
+                    ReadStart += ReadCount;
+
+                    if (ReadCount <= 0)
+                    {
+                        std::print("out inf loop!!\n");
+                        break;
+                    }
+                }
+
+                BufferState->OutWritten += Pending;
+
+                for (int i = WriteStart; i < Count; ++i)
+                {
+                    Out[i] = 0.0f;
+                }
             }
 
-            BufferState->OutWritten += Pending;
-
-            for (int i = 0; i < MuteCount; ++i)
+#if 0
             {
-                Out[MuteStart + i] = 0.0f;
+                const size_t NewInReady = BufferState->InReady.load();
+                const size_t NewInProcessed = BufferState->InProcessed.load();
+                const size_t NewOutReady = BufferState->OutReady.load();
+                const size_t NewOutWritten = BufferState->OutWritten.load();
+
+
+                float TermInReady = float(NewInReady) / SamplesPerFrame;
+                float TermInProcessed = float(NewInProcessed) / SamplesPerFrame;
+                float TermOutReady = float(NewOutReady) / float(SamplesPerFrame);
+                float TermOutWritten = float(NewOutWritten) / float(SamplesPerFrame);
+                std::print("\nA: ir {} ip {} or {} ow {}\n",
+                        StartingInReady, StartingInProcessed, StartingOutReady, StartingOutWritten);
+                std::print("B: ir {} ip {} or {} ow {}\n",
+                        TermInReady, TermInProcessed, TermOutReady, TermOutWritten);
             }
+            std::print("frame complete\n");
+#endif
         }
     }
 };
