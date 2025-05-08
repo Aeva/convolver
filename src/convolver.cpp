@@ -25,6 +25,8 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <thread>
+#include <atomic>
 
 #define DIV_UP(X, Y) ((X + Y - 1) / Y)
 
@@ -504,14 +506,15 @@ const pw_filter_events FilterEvents =
 
 struct FilterSession
 {
-    pw_main_loop* Loop = nullptr;
+    pw_thread_loop* Loop = nullptr;
     pw_filter* Filter = nullptr;
     FilterRealTimeThread RealTimeThread;
+    std::atomic_bool Live = false;
 
     static void OnQuit(void *UserData, int Signal)
     {
         FilterSession* Data = (FilterSession*)UserData;
-        pw_main_loop_quit(Data->Loop);
+        Data->Live.store(false);
     }
 
     FilterSession()
@@ -521,13 +524,14 @@ struct FilterSession
         uint8_t BuilderBuffer[1024];
         spa_pod_builder PodBuilder = SPA_POD_BUILDER_INIT(BuilderBuffer, sizeof(BuilderBuffer));
 
-        Loop = pw_main_loop_new(nullptr);
+        Loop = pw_thread_loop_new("convolver", nullptr);
+        pw_thread_loop_lock(Loop);
 
-        pw_loop_add_signal(pw_main_loop_get_loop(Loop), SIGINT, FilterSession::OnQuit, this);
-        pw_loop_add_signal(pw_main_loop_get_loop(Loop), SIGTERM, FilterSession::OnQuit, this);
+        pw_loop_add_signal(pw_thread_loop_get_loop(Loop), SIGINT, FilterSession::OnQuit, this);
+        pw_loop_add_signal(pw_thread_loop_get_loop(Loop), SIGTERM, FilterSession::OnQuit, this);
 
         Filter = pw_filter_new_simple(
-            pw_main_loop_get_loop(Loop),
+            pw_thread_loop_get_loop(Loop),
             "convolver",
             pw_properties_new(
                 PW_KEY_MEDIA_TYPE, "Audio",
@@ -557,23 +561,34 @@ struct FilterSession
             Params.push_back(spa_format_audio_raw_build(&PodBuilder, SPA_PARAM_EnumFormat, &StreamFormat));
         }
 
+        pw_thread_loop_unlock(Loop);
+
         if (pw_filter_connect(Filter, PW_FILTER_FLAG_RT_PROCESS, Params.data(), Params.size()) < 0)
         {
             std::print("Can't connect?\n");
             Reset();
         }
+
     }
 
     void Run()
     {
         if (Loop && Filter)
         {
-            pw_main_loop_run(Loop);
+            pw_thread_loop_lock(Loop);
+            Live.store(true);
+            pw_thread_loop_start(Loop);
+            pw_thread_loop_unlock(Loop);
         }
     }
 
     void Reset()
     {
+        Live.store(false);
+        if (Loop)
+        {
+            pw_thread_loop_lock(Loop);
+        }
         if (Filter)
         {
             pw_filter_destroy(Filter);
@@ -581,7 +596,9 @@ struct FilterSession
         }
         if (Loop)
         {
-            pw_main_loop_destroy(Loop);
+            pw_thread_loop_unlock(Loop);
+            pw_thread_loop_stop(Loop);
+            pw_thread_loop_destroy(Loop);
             Loop = nullptr;
         }
     }
@@ -601,6 +618,12 @@ int main(int argc, char *argv[])
         {
             FilterSession Session;
             Session.Run();
+            std::print("Entering main loop\n");
+            while (Session.Live.load())
+            {
+                std::this_thread::yield();
+            }
+            std::print("Shutting down\n");
             Session.Reset();
         }
         pw_deinit();
