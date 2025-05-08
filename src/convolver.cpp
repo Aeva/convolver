@@ -430,19 +430,6 @@ struct WaveData
 };
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct FilterRealTimeThread
 {
     void SetupPorts(pw_filter* Filter)
@@ -497,14 +484,7 @@ private:
 };
 
 
-const pw_filter_events FilterEvents =
-{
-    .version = PW_VERSION_FILTER_EVENTS,
-    .process = FilterRealTimeThread::OnProcess,
-};
-
-
-struct FilterSession
+struct PipeWireFilter
 {
     pw_thread_loop* Loop = nullptr;
     pw_filter* Filter = nullptr;
@@ -513,11 +493,11 @@ struct FilterSession
 
     static void OnQuit(void *UserData, int Signal)
     {
-        FilterSession* Data = (FilterSession*)UserData;
+        PipeWireFilter* Data = (PipeWireFilter*)UserData;
         Data->Live.store(false);
     }
 
-    FilterSession()
+    PipeWireFilter()
     {
         std::vector<const spa_pod*> Params;
 
@@ -527,8 +507,14 @@ struct FilterSession
         Loop = pw_thread_loop_new("convolver", nullptr);
         pw_thread_loop_lock(Loop);
 
-        pw_loop_add_signal(pw_thread_loop_get_loop(Loop), SIGINT, FilterSession::OnQuit, this);
-        pw_loop_add_signal(pw_thread_loop_get_loop(Loop), SIGTERM, FilterSession::OnQuit, this);
+        pw_loop_add_signal(pw_thread_loop_get_loop(Loop), SIGINT, PipeWireFilter::OnQuit, this);
+        pw_loop_add_signal(pw_thread_loop_get_loop(Loop), SIGTERM, PipeWireFilter::OnQuit, this);
+
+        static const pw_filter_events FilterEvents =
+        {
+            .version = PW_VERSION_FILTER_EVENTS,
+            .process = FilterRealTimeThread::OnProcess,
+        };
 
         Filter = pw_filter_new_simple(
             pw_thread_loop_get_loop(Loop),
@@ -603,7 +589,7 @@ struct FilterSession
         }
     }
 
-    ~FilterSession()
+    ~PipeWireFilter()
     {
         Reset();
     }
@@ -613,39 +599,7 @@ struct FilterSession
 
 int main(int argc, char *argv[])
 {
-    {
-        pw_init(&argc, &argv);
-        {
-            FilterSession Session;
-            Session.Run();
-            std::print("Entering main loop\n");
-            while (Session.Live.load())
-            {
-                std::this_thread::yield();
-            }
-            std::print("Shutting down\n");
-            Session.Reset();
-        }
-        pw_deinit();
-        return 0;
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    pw_init(&argc, &argv);
 
     const std::string SampleFramesHintStr = std::format("{}", BytesPerFrame);
 
@@ -1218,6 +1172,9 @@ int main(int argc, char *argv[])
     SDL_ResumeAudioStreamDevice(InStream);
     SDL_SetAudioStreamGain(OutStream, 6.0);
 
+    PipeWireFilter PipeWireSession;
+    PipeWireSession.Run();
+
     bool Shutdown = false;
     int32_t FrameNumber = 0;
     while (!Shutdown)
@@ -1392,6 +1349,7 @@ int main(int argc, char *argv[])
         ++FrameNumber;
     }
 #endif
+    PipeWireSession.Reset();
 
 #if BENCHMARKING
     {
@@ -1505,6 +1463,7 @@ int main(int argc, char *argv[])
     TEARDOWN_FROM_NOMINAL();
 
     SDL_DestroyAudioStream(OutStream);
+    pw_deinit();
 
     std::print("Done!\n");
     return 0;
