@@ -1246,6 +1246,7 @@ int main(int argc, char *argv[])
 #endif
 
     bool Shutdown = false;
+
     int32_t FrameNumber = 0;
     while (!Shutdown)
     {
@@ -1260,6 +1261,10 @@ int main(int argc, char *argv[])
         }
 
 #if LIVE_STREAM_MODE
+        if (!PipeWireSession.Live.load())
+        {
+            Shutdown = true;
+        }
         {
             const size_t InReady = BufferState.InReady.load();
             const size_t InProcessed = BufferState.InProcessed.load();
