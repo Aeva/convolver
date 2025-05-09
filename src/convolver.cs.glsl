@@ -57,6 +57,6 @@ void main()
 
     if (subgroupElect())
     {
-        BufferC.Data[GroupIndex] = Total;
+        BufferC.Data[Sample % SizeC] = Total;
     }
 }

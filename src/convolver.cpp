@@ -549,7 +549,7 @@ private:
                 const size_t Pending = std::min(PrecedingOutReady - PrecedingOutWritten, Count);
                 const size_t MuteStart = Pending;
                 const size_t MuteCount = Count - Pending;
-                size_t ReadStart = PrecedingOutReady;
+                size_t ReadStart = PrecedingOutWritten;
                 size_t WriteStart = 0;
 
                 while (WriteStart < Pending)
@@ -576,6 +576,11 @@ private:
                 {
                     Out[i] = 0.0f;
                 }
+
+                if (Pending < Count)
+                {
+                    std::print("Not enough output samples ready, padding with zeros!\n");
+                }
             }
 
 #if 0
@@ -597,6 +602,13 @@ private:
             }
             std::print("frame complete\n");
 #endif
+        }
+        else if (Out)
+        {
+            for (int i = 0; i < Count; ++i)
+            {
+                Out[i] = 0.0f;
+            }
         }
     }
 };
@@ -1238,12 +1250,13 @@ int main(int argc, char *argv[])
     }
 
     const int32_t SizeB = WaveB.Samples.size();
-    const int32_t SizeC = SamplesPerFrame;
+    const int32_t MinSizeC = SamplesPerFrame;
 
     // History pages needs to be long enough to prevent overlap in the ring buffer between live convolution ranges.
-    const int32_t HistoryPages = std::max(DIV_UP(SizeB * 2, SizeC), 5);
+    const int32_t HistoryPages = std::max(DIV_UP(SizeB * 2, MinSizeC), 5);
     const int32_t UploadPages = 1;
     const int32_t SizeA = SamplesPerFrame * (UploadPages + HistoryPages);
+    const int32_t SizeC = SizeA;
 
     SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeA, 0.0f);
     SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveB.Samples);
@@ -1495,7 +1508,7 @@ int main(int argc, char *argv[])
 
         std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(float)) / 1024.0);
         std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(float)) / 1024.0);
-        std::print("\t     Output frame: {:.2f} KiB\n", double(SizeC * sizeof(float)) / 1024.0);
+        std::print("\t      Output ring: {:.2f} KiB\n", double(SizeC * sizeof(float)) / 1024.0);
         std::print("\n");
 
         std::print("\tSamples per frame: {}\n", SamplesPerFrame);
