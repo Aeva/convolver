@@ -430,6 +430,7 @@ struct WaveData
 };
 
 
+#if LIVE_STREAM_MODE
 struct ThreadShared
 {
     std::atomic_size_t InReady = 0;
@@ -694,12 +695,14 @@ struct PipeWireFilter
         Reset();
     }
 };
-
+#endif //LIVE_STREAM_MODE
 
 
 int main(int argc, char *argv[])
 {
+#if LIVE_STREAM_MODE
     pw_init(&argc, &argv);
+#endif
 
     const std::string SampleFramesHintStr = std::format("{}", BytesPerFrame);
 
@@ -1191,7 +1194,11 @@ int main(int argc, char *argv[])
     const int32_t HistoryPages = std::max(DIV_UP(SizeB * 2, MinSizeC), 5);
     const int32_t UploadPages = 1;
     const int32_t SizeA = SamplesPerFrame * (UploadPages + HistoryPages);
+#if LIVE_STREAM_MODE
     const int32_t SizeC = SizeA;
+#else
+    const int32_t SizeC = MinSizeC;
+#endif
 
     SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeA, 0.0f);
     SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveB.Samples);
@@ -1438,7 +1445,10 @@ int main(int argc, char *argv[])
         ++FrameNumber;
     }
 #endif
+
+#if LIVE_STREAM_MODE
     PipeWireSession.Reset();
+#endif
 
 #if BENCHMARKING
     {
@@ -1550,7 +1560,9 @@ int main(int argc, char *argv[])
 
     TEARDOWN_FROM_NOMINAL();
 
+#if LIVE_STREAM_MODE
     pw_deinit();
+#endif
 
     std::print("Done!\n");
     return 0;
