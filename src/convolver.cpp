@@ -715,9 +715,9 @@ int main(int argc, char *argv[])
         return SDL_APP_FAILURE;
     }
 
+#if !LIVE_STREAM_MODE
     SDL_AudioStream* InStream = nullptr;
     SDL_AudioStream* OutStream = nullptr;
-#if !LIVE_STREAM_MODE
     WaveStream* WaveA = nullptr;
 #endif
     WaveData WaveB;
@@ -730,59 +730,16 @@ int main(int argc, char *argv[])
             .freq = SampleRate,
         };
 
+#if !LIVE_STREAM_MODE
         OutStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &OutSpec, nullptr, nullptr);
         if (!OutStream)
         {
             std::print("Could not create output audio stream: {}", SDL_GetError());
             return SDL_APP_FAILURE;
         }
+#endif
 
 #if LIVE_STREAM_MODE
-        SDL_AudioDeviceID RecordingDevice = SDL_AUDIO_DEVICE_DEFAULT_RECORDING;
-        {
-            std::set<std::string> PreferredDevices;
-            {
-                PreferredDevices.emplace("MiniFuse 2 Stereo Input 1+2 L/R");
-            }
-
-            int DeviceCount;
-            SDL_AudioDeviceID* AvailableDevices = SDL_GetAudioRecordingDevices(&DeviceCount);
-            int Selection = -1;
-
-            if (DeviceCount > 0)
-            {
-                std::print("\nAvailable recording devices:\n");
-
-                for (int i = 0; i < DeviceCount; ++i)
-                {
-                    std::string DeviceName = SDL_GetAudioDeviceName(AvailableDevices[i]);
-                    if (Selection == -1)
-                    {
-                        if (std::find(PreferredDevices.begin(), PreferredDevices.end(), DeviceName) == PreferredDevices.end())
-                        {
-                            RecordingDevice = AvailableDevices[i];
-                            Selection = i;
-                        }
-                    }
-
-                    if (Selection == i)
-                    {
-                        std::print(" {} SELECTED: {} \n", i, DeviceName);
-                    }
-                    else
-                    {
-                        std::print(" {} : {}\n", i, DeviceName);
-                    }
-                }
-            }
-        }
-
-        InStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, &OutSpec, nullptr, nullptr);
-        if (!InStream)
-        {
-            std::print("Could not create input audio stream: {}", SDL_GetError());
-            return SDL_APP_FAILURE;
-        }
         WaveB = WaveData(OutSpec, "revolver.wav");
 #else
         WaveA = new WaveStream(OutSpec, "strange_birds.wav");
@@ -791,11 +748,19 @@ int main(int argc, char *argv[])
 #endif
     }
 
+#if LIVE_STREAM_MODE
+    if (WaveB.Samples.size() == 0)
+    {
+        std::print("Unable to open impulse response file.\n");
+        return SDL_APP_FAILURE;
+    }
+#else
     if (InStream == nullptr || WaveB.Samples.size() == 0)
     {
         std::print("Unable to open input streams and/or files\n");
         return SDL_APP_FAILURE;
     }
+#endif
     else
     {
         std::reverse(WaveB.Samples.begin(), WaveB.Samples.end());
@@ -1270,13 +1235,14 @@ int main(int argc, char *argv[])
 #endif
 
 #if 1
-    SDL_ResumeAudioStreamDevice(InStream);
-    SDL_SetAudioStreamGain(OutStream, 6.0);
 
 #if LIVE_STREAM_MODE
     ThreadShared BufferState = ThreadShared(BufferA, BufferC);
     PipeWireFilter PipeWireSession(&BufferState);
     PipeWireSession.Run();
+#else
+    SDL_ResumeAudioStreamDevice(InStream);
+    SDL_SetAudioStreamGain(OutStream, 6.0);
 #endif
 
     bool Shutdown = false;
@@ -1541,15 +1507,12 @@ int main(int argc, char *argv[])
     }
 #endif
 
-#if LIVE_STREAM_MODE
-    SDL_DestroyAudioStream(InStream);
-#else
+#if !LIVE_STREAM_MODE
     if (WaveA)
     {
         delete WaveA;
         WaveA = nullptr;
     }
-#endif
 
     if (!Shutdown)
     {
@@ -1569,6 +1532,8 @@ int main(int argc, char *argv[])
         }
         while (RemainingBytes > 0);
     }
+    SDL_DestroyAudioStream(OutStream);
+#endif
 
     vkDestroyPipelineLayout(Device, ConvolverPipelineLayout, nullptr);
     delete BufferA;
@@ -1580,7 +1545,6 @@ int main(int argc, char *argv[])
 
     TEARDOWN_FROM_NOMINAL();
 
-    SDL_DestroyAudioStream(OutStream);
     pw_deinit();
 
     std::print("Done!\n");
