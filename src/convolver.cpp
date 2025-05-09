@@ -506,12 +506,6 @@ private:
         const size_t PrecedingOutReady = BufferState->OutReady.load();
         const size_t PrecedingOutWritten = BufferState->OutWritten.load();
 
-
-        float StartingInReady = float(PrecedingInReady) / SamplesPerFrame;
-        float StartingInProcessed = float(PrecedingInProcessed) / SamplesPerFrame;
-        float StartingOutReady = float(PrecedingOutReady) / SamplesPerFrame;
-        float StartingOutWritten = float(PrecedingOutWritten) / SamplesPerFrame;
-
         if (In && Out)
         {
             {
@@ -533,10 +527,6 @@ private:
                     if (WriteCount <= 0)
                     {
                         std::print("in inf loop!!\n");
-                        std::print("ir {} ip {} or {} ow {}\n",
-                                   StartingInReady, StartingInProcessed, StartingOutReady, StartingOutWritten);
-                        std::print("{} {} {}\n\n", InSampleCount, WriteStart, WriteCount);
-
                         break;
                     }
                 }
@@ -582,26 +572,6 @@ private:
                     std::print("Not enough output samples ready, padding with zeros!\n");
                 }
             }
-
-#if 0
-            {
-                const size_t NewInReady = BufferState->InReady.load();
-                const size_t NewInProcessed = BufferState->InProcessed.load();
-                const size_t NewOutReady = BufferState->OutReady.load();
-                const size_t NewOutWritten = BufferState->OutWritten.load();
-
-
-                float TermInReady = float(NewInReady) / SamplesPerFrame;
-                float TermInProcessed = float(NewInProcessed) / SamplesPerFrame;
-                float TermOutReady = float(NewOutReady) / float(SamplesPerFrame);
-                float TermOutWritten = float(NewOutWritten) / float(SamplesPerFrame);
-                std::print("\nA: ir {} ip {} or {} ow {}\n",
-                        StartingInReady, StartingInProcessed, StartingOutReady, StartingOutWritten);
-                std::print("B: ir {} ip {} or {} ow {}\n",
-                        TermInReady, TermInProcessed, TermOutReady, TermOutWritten);
-            }
-            std::print("frame complete\n");
-#endif
         }
         else if (Out)
         {
