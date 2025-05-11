@@ -48,7 +48,7 @@ CPP_SUFFIX = re.compile(r'\.cpp$')
 
 
 def graph_search(graph, name):
-    name = BUILD_PREFIX.sub('src/', SPIRV_SUFFIX.sub('.glsl', name))
+    name = BUILD_PREFIX.sub('', SPIRV_SUFFIX.sub('.glsl', name))
     query = re.compile(f'^src/(.+/)*{name}$')
     for path, node in graph.items():
         if query.match(path):
@@ -190,7 +190,9 @@ class FileInfo:
 
     def build(self):
         assert(self.dirty)
-        print(f"compiling {self.path}...")
+
+        print(f"{'_' * 79}")
+        print(f"Compiling {self.path}...\n")
 
         error = None
         command = None
@@ -281,9 +283,13 @@ if __name__ == "__main__":
                 assert(os.path.isfile(node.artifact))
                 object_files.append(node.artifact)
         assert(len(object_files) > 0)
+        print(f"{'_' * 79}")
+        print(f"Linking convolver...\n")
         command = LINK_COMMON + " " + " ".join(object_files) + " -o convolver"
         if error := run(command):
             print(f"\ncommand failed with error:\n\n{command}\n")
+        else:
+            print("... done!")
 
     with open(".journal", "wb") as f:
         pickle.dump(graph, f)
