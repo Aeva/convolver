@@ -34,7 +34,7 @@ const int SampleRate = 48000;
 const int32_t GroupSize = GROUP_SIZE;
 
 //const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
-const float IdealMinFrameDurationMs = 11.0f; // Raise this if you have hitching problems.
+const float IdealMinFrameDurationMs = 8.0f; // Raise this if you have hitching problems.
 const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
 const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
 const int32_t MinGroupsPerFrame = 1;

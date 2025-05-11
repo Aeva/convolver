@@ -36,21 +36,14 @@ void main()
     const int GroupIndex = int(gl_WorkGroupID.x);
     const int Sample = Start + GroupIndex;
 
-    const int Slice = DIV_UP(SizeB, GROUP_SIZE);
-    const int SliceStart = LaneIndex * Slice;
-    const int SliceStop = min(SliceStart + Slice, SizeB);
-
     float LaneAcc = 0.0f;
 
-    if (SliceStart < SizeB)
+    const int StartA = Sample - (SizeB - 1);
+    for (int i = LaneIndex; i < SizeB; i += GROUP_SIZE)
     {
-        const int StartA = Sample - (SizeB - 1);
-        for (int i = SliceStart; i < SliceStop; ++i)
-        {
-            const float SampleA = BufferA.Data[(StartA + i) % SizeA];
-            const float SampleB = BufferB.Data[i];
-            LaneAcc += SampleA * SampleB;
-        }
+        const float SampleA = BufferA.Data[(StartA + i) % SizeA];
+        const float SampleB = BufferB.Data[i];
+        LaneAcc += SampleA * SampleB;
     }
 
     const float Total = subgroupAdd(LaneAcc);

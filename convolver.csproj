@@ -26,7 +26,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <GroupSize>32</GroupSize>
+    <GroupSize>8</GroupSize>
   </PropertyGroup>
 
   <PropertyGroup>
