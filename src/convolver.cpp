@@ -6,11 +6,8 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_events.h>
 
-#if LIVE_STREAM_MODE
-#include "pipewire.h"
-#endif
-
 #include <vulkan/vulkan.h>
+
 #include <print>
 #include <format>
 #include <vector>
@@ -23,8 +20,13 @@
 #include <cmath>
 #include <thread>
 
+#include "assorted.h"
+#include "shader.h"
 
-#define DIV_UP(X, Y) ((X + Y - 1) / Y)
+#if LIVE_STREAM_MODE
+#include "pipewire.h"
+#endif
+
 
 const int SampleRate = 48000;
 const int32_t GroupSize = GROUP_SIZE;
@@ -38,78 +40,6 @@ const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(Target
 const int32_t SamplesPerFrame = GroupsPerFrame;
 const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
 const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
-
-
-const char ConvolverShaderSource[] = {
-#embed "scratch/convolver.cs.spirv"
-};
-
-// see https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
-#define FG(COLOR) std::format("\33[38:5:{}m", COLOR)
-#define BG(COLOR) std::format("\33[48:5:{}m", COLOR)
-#define ANSI_RESET "\33[0m"
-#define DEFAULT_FG "\33[39m"
-#define DEFAULT_BG "\33[49m"
-#define HAS_FLAG(BITS, FLAG) ((BITS & FLAG) == FLAG)
-
-void PrintShader()
-{
-    std::print("Here is my shader do you like it?\n\n");
-
-    int i = 0;
-    std::vector<char> Line;
-    const int LastIndex = sizeof(ConvolverShaderSource) - 1;
-    for (const char Symbol : ConvolverShaderSource)
-    {
-        if (i % 4 == 0)
-        {
-            std::print(" ");
-        }
-        std::string Color;
-        if (Symbol >= 32 && Symbol <= 126)
-        {
-            Color = FG(5);
-            Line.push_back(Symbol);
-        }
-        else
-        {
-            Color = (Symbol == 0) ? FG(8) : FG(15);
-            Line.push_back('\0');
-        }
-        std::print("{}{:02x}{}", Color, (uint8_t)Symbol, ANSI_RESET);
-
-        if (i % 16 == 15 || i == LastIndex)
-        {
-            int Remainder = 16 - Line.size();
-            while (Remainder > 0)
-            {
-                std::print("{}             {}", FG(8), ANSI_RESET);
-                Remainder -= 4;
-            }
-            std::print("  ");
-            for (char Text : Line)
-            {
-                if (Text == '\0')
-                {
-                    std::print("{}{}{}", FG(8), '.', ANSI_RESET);
-                }
-                else
-                {
-                    std::print("{}{}{}{}", BG(0), FG(5), Text, ANSI_RESET);
-                }
-            }
-            Line.clear();
-            std::print("\n");
-        }
-        else
-        {
-            std::print(" ");
-        }
-        ++i;
-    }
-    std::print("{}\n", ANSI_RESET);
-    std::print("I made it for you! :3\n");
-}
 
 
 struct CandidateDeviceInfo
@@ -791,19 +721,9 @@ int main(int argc, char *argv[])
     VkPipeline ConvolverPipeline;
     VkPipelineLayout ConvolverPipelineLayout;
     {
-        PrintShader();
-
         VkShaderModule ShaderModule;
         {
-            static_assert(sizeof(ConvolverShaderSource) % sizeof(uint32_t) == 0);
-            VkShaderModuleCreateInfo CreateInfo = {
-                .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .codeSize = sizeof(ConvolverShaderSource),
-                .pCode = (const uint32_t*)ConvolverShaderSource
-            };
-            VkResult Result = vkCreateShaderModule(Device, &CreateInfo, nullptr, &ShaderModule);
+            VkResult Result = CreateConvolverShader(Device, ShaderModule);
             if (Result != VK_SUCCESS)
             {
                 std::print("Shader module creation failed with error code: {}\n", (int)Result);
