@@ -39,7 +39,7 @@ def file_type(path):
     return "unknown", None
 
 
-BUILD_PREFIX = re.compile(r'^build/')
+BUILD_PREFIX = re.compile(r'^scratch/')
 SRC_PREFIX = re.compile(r'^src/')
 
 SPIRV_SUFFIX = re.compile(r'\.spirv$')
@@ -74,6 +74,7 @@ CPP_COMMON = " ".join([
     "-std=c++2c",
     "-Wc23-extensions",
     "-DGROUP_SIZE=8",
+    f"-I{os.path.abspath("scratch")}/",
     "-I/usr/include/pipewire-0.3",
     "-I/usr/include/spa-0.2",
 ])
@@ -119,10 +120,10 @@ class FileInfo:
                     self.embeds = EMBEDS.findall(text)
 
         if self.type == "glsl":
-            self.artifact = SRC_PREFIX.sub('build/', GLSL_SUFFIX.sub('.spirv', path))
+            self.artifact = SRC_PREFIX.sub('scratch/', GLSL_SUFFIX.sub('.spirv', path))
 
         elif self.type == "c++":
-            self.artifact = SRC_PREFIX.sub('build/', CPP_SUFFIX.sub('.o', path))
+            self.artifact = SRC_PREFIX.sub('scratch/', CPP_SUFFIX.sub('.o', path))
 
     def populate(self, graph, journal, sequence):
         if self.partial:
@@ -214,8 +215,8 @@ class FileInfo:
 def analyze():
     graph = {}
     journal = {}
-    if os.path.isfile("build/.journal"):
-        with open("build/.journal", "rb") as f:
+    if os.path.isfile(".journal"):
+        with open(".journal", "rb") as f:
             journal = pickle.load(f)
 
     src_root = re.compile(r'^src/')
@@ -256,12 +257,15 @@ def analyze():
 
 
 if __name__ == "__main__":
-    if not os.path.isdir("build"):
-        assert(not os.path.exists("build"))
-        os.mkdir("build")
+    if not os.path.isdir("scratch"):
+        assert(not os.path.exists("scratch"))
+        os.mkdir("scratch")
 
     graph, sequence = analyze()
     error = False
+
+    if not sequence:
+        print("everything is normal")
 
     for node in sequence:
         error = error or node.build()
@@ -281,5 +285,5 @@ if __name__ == "__main__":
         if error := run(command):
             print(f"\ncommand failed with error:\n\n{command}\n")
 
-    with open("build/.journal", "wb") as f:
+    with open(".journal", "wb") as f:
         pickle.dump(graph, f)

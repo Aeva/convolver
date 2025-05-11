@@ -45,7 +45,7 @@ const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
 
 
 const char ConvolverShaderSource[] = {
-#embed "convolver.cs.spirv"
+#embed "scratch/convolver.cs.spirv"
 };
 
 // see https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit

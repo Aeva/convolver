@@ -1,4 +1,5 @@
 build/
+.journal
 *.o
 *.spirv
 *.wav
