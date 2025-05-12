@@ -23,7 +23,7 @@ void PipeWireHalt()
 }
 
 
-ThreadShared::ThreadShared(float* BufferA, size_t SizeA, float* BufferC, size_t SizeC)
+ThreadShared::ThreadShared(int16_t* BufferA, size_t SizeA, int16_t* BufferC, size_t SizeC)
 {
     InSamples = BufferA;
     InSampleCount = SizeA;
@@ -42,7 +42,7 @@ void FilterRealTimeThread::SetupPorts(ThreadShared* InBufferState, pw_filter* Fi
         PW_FILTER_PORT_FLAG_MAP_BUFFERS,
         sizeof(FilterRealTimeThread),
         pw_properties_new(
-            PW_KEY_FORMAT_DSP, "32 bit float mono audio",
+            PW_KEY_FORMAT_DSP, "16 bit int mono audio",
             PW_KEY_PORT_NAME, "input",
             nullptr),
         nullptr, 0);
@@ -53,7 +53,7 @@ void FilterRealTimeThread::SetupPorts(ThreadShared* InBufferState, pw_filter* Fi
         PW_FILTER_PORT_FLAG_MAP_BUFFERS,
         sizeof(FilterRealTimeThread),
         pw_properties_new(
-            PW_KEY_FORMAT_DSP, "32 bit float mono audio",
+            PW_KEY_FORMAT_DSP, "16 bit int mono audio",
             PW_KEY_PORT_NAME, "output",
             nullptr),
         nullptr, 0);
@@ -71,8 +71,8 @@ void FilterRealTimeThread::OnProcessInner(const spa_io_position& Position)
 {
     const size_t Count = Position.clock.duration;
 
-    float* In = (float*)pw_filter_get_dsp_buffer(InPort, Count);
-    float* Out = (float*)pw_filter_get_dsp_buffer(OutPort, Count);
+    int16_t* In = (int16_t*)pw_filter_get_dsp_buffer(InPort, Count);
+    int16_t* Out = (int16_t*)pw_filter_get_dsp_buffer(OutPort, Count);
 
     const size_t PrecedingInReady = BufferState->InReady.load();
     const size_t PrecedingInProcessed = BufferState->InProcessed.load();
@@ -91,9 +91,9 @@ void FilterRealTimeThread::OnProcessInner(const spa_io_position& Position)
                 size_t MaxWrite = InSampleCount - (WriteStart % InSampleCount);
                 size_t WriteCount = std::min(Count, MaxWrite);
 
-                float* ReadHead = In + ReadStart;
-                float* WriteHead = BufferState->InSamples + (WriteStart % InSampleCount);
-                memcpy(WriteHead, ReadHead, WriteCount * sizeof(float));
+                int16_t* ReadHead = In + ReadStart;
+                int16_t* WriteHead = BufferState->InSamples + (WriteStart % InSampleCount);
+                memcpy(WriteHead, ReadHead, WriteCount * sizeof(int16_t));
                 ReadStart += WriteCount;
                 WriteStart += WriteCount;
 
@@ -120,9 +120,9 @@ void FilterRealTimeThread::OnProcessInner(const spa_io_position& Position)
                 size_t MaxRead = OutSampleCount - (ReadStart % OutSampleCount);
                 size_t ReadCount = std::min(Pending, MaxRead);
 
-                float* WriteHead = Out + WriteStart;
-                float* ReadHead = BufferState->OutSamples + (ReadStart % OutSampleCount);
-                memcpy(WriteHead, ReadHead, ReadCount * sizeof(float));
+                int16_t* WriteHead = Out + WriteStart;
+                int16_t* ReadHead = BufferState->OutSamples + (ReadStart % OutSampleCount);
+                memcpy(WriteHead, ReadHead, ReadCount * sizeof(int16_t));
                 WriteStart += ReadCount;
                 ReadStart += ReadCount;
 
@@ -184,14 +184,14 @@ PipeWireFilter::PipeWireFilter(ThreadShared* BufferState, int SampleRate)
 
     Filter = pw_filter_new_simple(
         pw_thread_loop_get_loop(Loop),
-                                    "convolver",
-                                    pw_properties_new(
-                                        PW_KEY_MEDIA_TYPE, "Audio",
-                                        PW_KEY_MEDIA_CATEGORY, "Filter",
-                                        PW_KEY_MEDIA_ROLE, "DSP",
-                                        nullptr),
-                                    &FilterEvents,
-                                    &RealTimeThread);
+        "convolver",
+        pw_properties_new(
+            PW_KEY_MEDIA_TYPE, "Audio",
+            PW_KEY_MEDIA_CATEGORY, "Filter",
+            PW_KEY_MEDIA_ROLE, "DSP",
+            nullptr),
+        &FilterEvents,
+        &RealTimeThread);
 
     RealTimeThread.SetupPorts(BufferState, Filter);
 

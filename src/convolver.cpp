@@ -1124,10 +1124,6 @@ int main(int argc, char *argv[])
         }
 
 #if !LIVE_STREAM_MODE
-        for (int i = 0; i < Params.SamplesPerFrame; ++i)
-        {
-            std::print("{}\n", BufferC->Mapped[i]);
-        }
         SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(int16_t) * Params.SamplesPerFrame);
         SDL_ResumeAudioStreamDevice(OutStream);
 #endif

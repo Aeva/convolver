@@ -18,13 +18,13 @@ struct ThreadShared
     std::atomic_size_t OutReady = 0;
     std::atomic_size_t OutWritten = 0;
 
-    float* InSamples = nullptr;
-    float* OutSamples = nullptr;
+    int16_t* InSamples = nullptr;
+    int16_t* OutSamples = nullptr;
 
     size_t InSampleCount = 0;
     size_t OutSampleCount = 0;
 
-    ThreadShared(float* BufferA, size_t SizeA, float* BufferC, size_t SizeC);
+    ThreadShared(int16_t* BufferA, size_t SizeA, int16_t* BufferC, size_t SizeC);
 };
 
 
