@@ -1,5 +1,5 @@
 
-#define LIVE_STREAM_MODE 1
+#define LIVE_STREAM_MODE 0
 #define BENCHMARKING 1
 
 #include <SDL3/SDL.h>
@@ -48,11 +48,11 @@ struct ConvolverParameters
         : SampleRate(InSampleRate)
         , GroupSize(InGroupSize)
         , TargetSamplesPerFrame(int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs))
-        , TargetBytesPerFrame(TargetSamplesPerFrame * sizeof(float))
+        , TargetBytesPerFrame(TargetSamplesPerFrame * sizeof(uint16_t))
         , GroupsPerFrame(std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize))) * GroupSize)
         , SamplesPerFrame(GroupsPerFrame)
         , FrameSpan(double(SamplesPerFrame) / double(SampleRate) * 1000.0)
-        , BytesPerFrame(sizeof(float) * SamplesPerFrame)
+        , BytesPerFrame(sizeof(uint16_t) * SamplesPerFrame)
     {
     }
 
@@ -209,7 +209,8 @@ struct SharedMemory
         }
     }
 
-    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, std::vector<ElementType> Upload)
+    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, std::vector<uint16_t> Upload)
+        requires std::integral<ElementType>
         : SharedMemory(InDevice, MemoryTypeIndex, QueueFamilyIndex, Upload.size())
     {
         if (IsValid)
@@ -255,6 +256,7 @@ struct PushConstantsUpload
     int32_t SizeB;
     int32_t SizeC;
     int32_t Start;
+    float GainB;
 };
 
 
@@ -305,7 +307,7 @@ struct WaveStream
         }
     }
 
-    void Transcode(std::vector<float>& OutSamples)
+    void Transcode(std::vector<uint16_t>& OutSamples)
     {
         if (Stream)
         {
@@ -351,7 +353,8 @@ struct WaveStream
 
 struct WaveData
 {
-    std::vector<float> Samples;
+    std::vector<uint16_t> Samples;
+    float Scale = 1.0f;
 
     WaveData()
     {
@@ -371,18 +374,13 @@ struct WaveData
     void NormalizeImpulseResponse()
     {
         float Acc = 0.0f;
-        for (const float& Sample : Samples)
+        for (const uint16_t& Sample : Samples)
         {
-            Acc += std::abs(Sample);
+            Acc += std::abs(float(Sample) / float(0x7fff));
         }
 
         const float IdealLevel = 0.5;
-        const float Scale = IdealLevel / std::sqrt(Acc); // entirely intuition, but holds up so far under experimentation
-
-        for (float& Sample : Samples)
-        {
-            Sample *= Scale;
-        }
+        Scale = IdealLevel / std::sqrt(Acc); // entirely intuition, but holds up so far under experimentation
     }
 };
 
@@ -413,7 +411,7 @@ int main(int argc, char *argv[])
     {
         SDL_AudioSpec OutSpec =
         {
-            .format = SDL_AUDIO_F32,
+            .format = SDL_AUDIO_S16,
             .channels = 1,
             .freq = 0, // set by WaveB
         };
@@ -704,10 +702,20 @@ int main(int argc, char *argv[])
             .pQueuePriorities = Priority,
         };
 
+        VkPhysicalDevice16BitStorageFeatures SixteenBitStorageFeatures =
+        {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+            .pNext = nullptr,
+            .storageBuffer16BitAccess = VK_TRUE,
+            .uniformAndStorageBuffer16BitAccess = VK_TRUE,
+            .storagePushConstant16 = VK_FALSE,
+            .storageInputOutput16 = VK_FALSE,
+        };
+
         VkPhysicalDeviceSubgroupSizeControlFeatures SubgroupSizeControlFeatures =
         {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
-            .pNext = nullptr,
+            .pNext = &SixteenBitStorageFeatures,
             .subgroupSizeControl = VK_TRUE,
             .computeFullSubgroups = VK_FALSE,
         };
@@ -876,9 +884,9 @@ int main(int argc, char *argv[])
     const int32_t SizeC = MinSizeC;
 #endif
 
-    SharedMemory<float>* BufferA = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeA, 0.0f);
-    SharedMemory<float>* BufferB = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveB.Samples);
-    SharedMemory<float>* BufferC = new SharedMemory<float>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeC, 0.0f);
+    SharedMemory<int16_t>* BufferA = new SharedMemory<int16_t>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeA, 0.0f);
+    SharedMemory<int16_t>* BufferB = new SharedMemory<int16_t>(Device, MemoryTypeIndex, QueueFamilyIndex, WaveB.Samples);
+    SharedMemory<int16_t>* BufferC = new SharedMemory<int16_t>(Device, MemoryTypeIndex, QueueFamilyIndex, SizeC, 0.0f);
 
     if (!BufferA->IsValid)
     {
@@ -989,15 +997,15 @@ int main(int argc, char *argv[])
                 break;
             }
             while (BytesReady < Params.BytesPerFrame);
-            const int32_t SamplesReady = BytesReady / sizeof(float);
+            const int32_t SamplesReady = BytesReady / sizeof(uint16_t);
 
             // This is currently guaranteed: (Start % SamplesPerFrame) == 0
             const int WriteStart = (FrameNumber % HistoryPages) * Params.SamplesPerFrame;
-            float* WriteHead = BufferA->Mapped + WriteStart;
+            int16_t* WriteHead = BufferA->Mapped + WriteStart;
 
             if (SamplesReady > 0)
             {
-                const int BytesWritten = SDL_GetAudioStreamData(InStream, WriteHead, SamplesReady * sizeof(float));
+                const int BytesWritten = SDL_GetAudioStreamData(InStream, WriteHead, SamplesReady * sizeof(int16_t));
                 if (BytesWritten < 0)
                 {
                     std::print("\nError reading input stream: {}\n", SDL_GetError());
@@ -1035,7 +1043,8 @@ int main(int argc, char *argv[])
                 .SizeA = int32_t(BufferA->ElementCount),
                 .SizeB = int32_t(BufferB->ElementCount),
                 .SizeC = int32_t(BufferC->ElementCount),
-                .Start = Start
+                .Start = Start,
+                .GainB = WaveB.Scale,
             };
 
             VkCommandBufferBeginInfo BeginInfo =
@@ -1115,7 +1124,11 @@ int main(int argc, char *argv[])
         }
 
 #if !LIVE_STREAM_MODE
-        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * Params.SamplesPerFrame);
+        for (int i = 0; i < Params.SamplesPerFrame; ++i)
+        {
+            std::print("{}\n", BufferC->Mapped[i]);
+        }
+        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(int16_t) * Params.SamplesPerFrame);
         SDL_ResumeAudioStreamDevice(OutStream);
 #endif
         ++FrameNumber;
@@ -1133,9 +1146,9 @@ int main(int argc, char *argv[])
             std::print("Not enough samples recorded for benchmarking.\n\n");
         }
 
-        std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(float)) / 1024.0);
-        std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(float)) / 1024.0);
-        std::print("\t      Output ring: {:.2f} KiB\n", double(SizeC * sizeof(float)) / 1024.0);
+        std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(uint16_t)) / 1024.0);
+        std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(uint16_t)) / 1024.0);
+        std::print("\t      Output ring: {:.2f} KiB\n", double(SizeC * sizeof(uint16_t)) / 1024.0);
         std::print("\n");
 
         std::print("\tSamples per frame: {}\n", Params.SamplesPerFrame);
