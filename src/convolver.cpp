@@ -28,18 +28,39 @@
 #endif
 
 
-const int SampleRate = 48000;
-const int32_t GroupSize = GROUP_SIZE;
-
-//const float IdealMinFrameDurationMs = 1000.0f; // For debugging.
 const float IdealMinFrameDurationMs = 8.0f; // Raise this if you have hitching problems.
-const int32_t TargetSamplesPerFrame = int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs);
-const int32_t TargetBytesPerFrame = TargetSamplesPerFrame * sizeof(float);
 const int32_t MinGroupsPerFrame = 1;
-const int32_t GroupsPerFrame = std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize))) * GroupSize;
-const int32_t SamplesPerFrame = GroupsPerFrame;
-const double FrameSpan = double(SamplesPerFrame) / double(SampleRate) * 1000.0;
-const int32_t BytesPerFrame = sizeof(float) * SamplesPerFrame;
+
+
+struct ConvolverParameters
+{
+    const int SampleRate;
+    const int32_t GroupSize;
+
+    const int32_t TargetSamplesPerFrame;
+    const int32_t TargetBytesPerFrame;
+    const int32_t GroupsPerFrame;
+    const int32_t SamplesPerFrame;
+    const double FrameSpan;
+    const int32_t BytesPerFrame;
+
+    ConvolverParameters(int InSampleRate = 48000, int32_t InGroupSize = GROUP_SIZE)
+        : SampleRate(InSampleRate)
+        , GroupSize(InGroupSize)
+        , TargetSamplesPerFrame(int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs))
+        , TargetBytesPerFrame(TargetSamplesPerFrame * sizeof(float))
+        , GroupsPerFrame(std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize))) * GroupSize)
+        , SamplesPerFrame(GroupsPerFrame)
+        , FrameSpan(double(SamplesPerFrame) / double(SampleRate) * 1000.0)
+        , BytesPerFrame(sizeof(float) * SamplesPerFrame)
+    {
+    }
+
+    void Reset(int InSampleRate = 48000, int32_t InGroupSize = GROUP_SIZE)
+    {
+        new(this) ConvolverParameters(InSampleRate, InGroupSize);
+    }
+};
 
 
 struct CandidateDeviceInfo
@@ -251,7 +272,7 @@ struct WaveStream
     {
     }
 
-    WaveStream(const SDL_AudioSpec& InTargetSpec, const char* Path)
+    WaveStream(const SDL_AudioSpec& InTargetSpec, const char* Path, bool UseImportFrequency = false)
         : TargetSpec(InTargetSpec)
     {
         Name = Path;
@@ -259,6 +280,11 @@ struct WaveStream
 
         if (SDL_LoadWAV(FullPath.c_str(), &ImportSpec, &WaveData, &WaveSize))
         {
+            if (UseImportFrequency)
+            {
+                TargetSpec.freq = ImportSpec.freq;
+            }
+
             std::print("Opening {}\n", FullPath);
             std::print(" - Frequency: {} -> {}\n", ImportSpec.freq, TargetSpec.freq);
             std::print(" - Channels: {} -> {}\n", ImportSpec.channels, TargetSpec.channels);
@@ -331,10 +357,15 @@ struct WaveData
     {
     }
 
-    WaveData(const SDL_AudioSpec& TargetSpec, const char* Path)
+    WaveData(SDL_AudioSpec& TargetSpec, const char* Path, bool UseImportFrequency = false)
     {
-        WaveStream Stream(TargetSpec, Path);
+        WaveStream Stream(TargetSpec, Path, UseImportFrequency);
         Stream.Transcode(Samples);
+
+        if (UseImportFrequency)
+        {
+            TargetSpec.freq = Stream.ImportSpec.freq;
+        }
     }
 
     void NormalizeImpulseResponse()
@@ -362,13 +393,8 @@ int main(int argc, char *argv[])
     PipeWireInit(argc, argv);
 #endif
 
-    const std::string SampleFramesHintStr = std::format("{}", BytesPerFrame);
-
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_NAME, "Convolver");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_ROLE, "Magic");
-
-    //SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "alsa");
-    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, SampleFramesHintStr.c_str());
 
     if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_EVENTS))
     {
@@ -383,15 +409,23 @@ int main(int argc, char *argv[])
 #endif
     WaveData WaveB;
 
+    ConvolverParameters Params;
     {
         SDL_AudioSpec OutSpec =
         {
             .format = SDL_AUDIO_F32,
             .channels = 1,
-            .freq = SampleRate,
+            .freq = 0, // set by WaveB
         };
 
-#if !LIVE_STREAM_MODE
+        int ImportFrequency;
+#if LIVE_STREAM_MODE
+        WaveB = WaveData(OutSpec, "revolver.wav", true);
+#else
+        WaveB = WaveData(OutSpec, "chest.wav", true);
+
+        WaveA = new WaveStream(OutSpec, "strange_birds.wav");
+        InStream = WaveA->Stream;
         OutStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &OutSpec, nullptr, nullptr);
         if (!OutStream)
         {
@@ -400,13 +434,7 @@ int main(int argc, char *argv[])
         }
 #endif
 
-#if LIVE_STREAM_MODE
-        WaveB = WaveData(OutSpec, "revolver.wav");
-#else
-        WaveA = new WaveStream(OutSpec, "strange_birds.wav");
-        InStream = WaveA->Stream;
-        WaveB = WaveData(OutSpec, "chest.wav");
-#endif
+        Params.Reset(OutSpec.freq);
     }
 
 #if LIVE_STREAM_MODE
@@ -764,7 +792,7 @@ int main(int argc, char *argv[])
             {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
                 .pNext = nullptr,
-                .requiredSubgroupSize = GroupSize,
+                .requiredSubgroupSize = (uint32_t)Params.GroupSize,
             };
 
             VkComputePipelineCreateInfo CreateInfo =
@@ -836,12 +864,12 @@ int main(int argc, char *argv[])
     }
 
     const int32_t SizeB = WaveB.Samples.size();
-    const int32_t MinSizeC = SamplesPerFrame;
+    const int32_t MinSizeC = Params.SamplesPerFrame;
 
     // History pages needs to be long enough to prevent overlap in the ring buffer between live convolution ranges.
     const int32_t HistoryPages = std::max(DIV_UP(SizeB * 2, MinSizeC), 5);
     const int32_t UploadPages = 1;
-    const int32_t SizeA = SamplesPerFrame * (UploadPages + HistoryPages);
+    const int32_t SizeA = Params.SamplesPerFrame * (UploadPages + HistoryPages);
 #if LIVE_STREAM_MODE
     const int32_t SizeC = SizeA;
 #else
@@ -893,7 +921,7 @@ int main(int argc, char *argv[])
 
 #if LIVE_STREAM_MODE
     ThreadShared BufferState = ThreadShared(BufferA->Mapped, BufferA->ElementCount, BufferC->Mapped, BufferC->ElementCount);
-    PipeWireFilter PipeWireSession(&BufferState, SampleRate);
+    PipeWireFilter PipeWireSession(&BufferState, Params.SampleRate);
     PipeWireSession.Run();
 #else
     SDL_ResumeAudioStreamDevice(InStream);
@@ -924,25 +952,25 @@ int main(int argc, char *argv[])
             const size_t InReady = BufferState.InReady.load();
             const size_t InProcessed = BufferState.InProcessed.load();
             const size_t InPending = InReady - InProcessed;
-            if (InPending < SamplesPerFrame)
+            if (InPending < Params.SamplesPerFrame)
             {
                 continue;
             }
             else
             {
-                BufferState.InProcessed += SamplesPerFrame;
+                BufferState.InProcessed += Params.SamplesPerFrame;
             }
         }
 #else
         const int QueuedOutputBytes = SDL_GetAudioStreamQueued(OutStream);
-        if (QueuedOutputBytes > TargetBytesPerFrame * 4) // can go as low as * 2
+        if (QueuedOutputBytes > Params.TargetBytesPerFrame * 4) // can go as low as * 2
         {
             continue;
         }
 #endif
 
-        const int32_t Start = FrameNumber * SamplesPerFrame;
-        const int32_t Stop = Start + SamplesPerFrame;
+        const int32_t Start = FrameNumber * Params.SamplesPerFrame;
+        const int32_t Stop = Start + Params.SamplesPerFrame;
 
         bool PartialFrame = Start < BufferB->ElementCount;
 
@@ -954,17 +982,17 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            const int32_t BytesReady = int32_t(std::min(SDL_GetAudioStreamAvailable(InStream), int(BytesPerFrame)));
+            const int32_t BytesReady = int32_t(std::min(SDL_GetAudioStreamAvailable(InStream), int(Params.BytesPerFrame)));
             if (BytesReady < 0)
             {
                 std::print("\nError preparing to read from input stream: {}\n", SDL_GetError());
                 break;
             }
-            while (BytesReady < BytesPerFrame);
+            while (BytesReady < Params.BytesPerFrame);
             const int32_t SamplesReady = BytesReady / sizeof(float);
 
             // This is currently guaranteed: (Start % SamplesPerFrame) == 0
-            const int WriteStart = (FrameNumber % HistoryPages) * SamplesPerFrame;
+            const int WriteStart = (FrameNumber % HistoryPages) * Params.SamplesPerFrame;
             float* WriteHead = BufferA->Mapped + WriteStart;
 
             if (SamplesReady > 0)
@@ -977,7 +1005,7 @@ int main(int argc, char *argv[])
                 }
             }
 
-            const int32_t PaddingSamples = SamplesPerFrame - SamplesReady;
+            const int32_t PaddingSamples = Params.SamplesPerFrame - SamplesReady;
 
             if (PaddingSamples > 0)
             {
@@ -1020,7 +1048,7 @@ int main(int argc, char *argv[])
             vkBeginCommandBuffer(CommandBuffer, &BeginInfo);
             vkCmdBindPipeline(CommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, ConvolverPipeline);
             vkCmdPushConstants(CommandBuffer, ConvolverPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Upload), &Upload);
-            vkCmdDispatch(CommandBuffer, GroupsPerFrame, 1, 1);
+            vkCmdDispatch(CommandBuffer, Params.GroupsPerFrame, 1, 1);
             vkEndCommandBuffer(CommandBuffer);
         }
 
@@ -1044,7 +1072,7 @@ int main(int argc, char *argv[])
             Result = vkWaitForFences(Device, 1, &FrameFence, VK_TRUE, 0);
         }
 #if LIVE_STREAM_MODE
-        BufferState.OutReady += SamplesPerFrame;
+        BufferState.OutReady += Params.SamplesPerFrame;
 #endif
 
 #if BENCHMARKING
@@ -1055,7 +1083,7 @@ int main(int argc, char *argv[])
             TotalTimeMs += DeltaTime;
             ++RecordedSamples;
 
-            if (DeltaTime.count() > FrameSpan)
+            if (DeltaTime.count() > Params.FrameSpan)
             {
                 ++HitchCount;
             }
@@ -1087,7 +1115,7 @@ int main(int argc, char *argv[])
         }
 
 #if !LIVE_STREAM_MODE
-        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * SamplesPerFrame);
+        SDL_PutAudioStreamData(OutStream, BufferC->Mapped, sizeof(float) * Params.SamplesPerFrame);
         SDL_ResumeAudioStreamDevice(OutStream);
 #endif
         ++FrameNumber;
@@ -1110,8 +1138,8 @@ int main(int argc, char *argv[])
         std::print("\t      Output ring: {:.2f} KiB\n", double(SizeC * sizeof(float)) / 1024.0);
         std::print("\n");
 
-        std::print("\tSamples per frame: {}\n", SamplesPerFrame);
-        std::print("\t Groups per frame: {}\n", GroupsPerFrame);
+        std::print("\tSamples per frame: {}\n", Params.SamplesPerFrame);
+        std::print("\t Groups per frame: {}\n", Params.GroupsPerFrame);
         double AverageTime = 0.0;
 
         if (RecordedSamples > 0)
@@ -1145,19 +1173,19 @@ int main(int argc, char *argv[])
             std::print("\t       Total time: {:.3f} {}\n\n", TotalTime, TotalTimeUnit);
         }
 
-        std::print("\t    Audio latency: {:.3f} milliseconds minimum\n\n", FrameSpan);
+        std::print("\t    Audio latency: {:.3f} milliseconds minimum\n\n", Params.FrameSpan);
 
         if (RecordedSamples > 0)
         {
-            if (BestFrame.count() > FrameSpan)
+            if (BestFrame.count() > Params.FrameSpan)
             {
                 std::print("The best frame time is higher than the frame's playback duration!!\n");
             }
-            else if (AverageTime > FrameSpan)
+            else if (AverageTime > Params.FrameSpan)
             {
                 std::print("The average frame time is higher than the frame's playback duration!\n");
             }
-            else if (WorstFrame.count() > FrameSpan)
+            else if (WorstFrame.count() > Params.FrameSpan)
             {
                 std::print("The worst frame time is higher than the frame's playback duration!\n");
             }
