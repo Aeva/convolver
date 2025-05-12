@@ -1,4 +1,5 @@
 
+#include <cstdint>
 #include <vector>
 #include <print>
 
@@ -6,8 +7,8 @@
 #include "shader.h"
 
 
-static const char ConvolverShaderSource[] = {
-    #embed "scratch/convolver.cs.spirv"
+static const uint32_t ConvolverShaderSource[] = {
+    #include "scratch/convolver.cs.spirv"
 };
 
 
@@ -17,9 +18,15 @@ static void PrintShader()
 
     int i = 0;
     std::vector<char> Line;
-    const int LastIndex = sizeof(ConvolverShaderSource) - 1;
-    for (const char Symbol : ConvolverShaderSource)
+
+    uint8_t* Blob = (uint8_t*)ConvolverShaderSource;
+    size_t Bytes = sizeof(ConvolverShaderSource);
+
+    const int LastIndex = Bytes - 1;
+    for (int i = 0; i < Bytes; ++i)
     {
+        const uint8_t Symbol = Blob[i];
+
         if (i % 4 == 0)
         {
             std::print(" ");
@@ -64,7 +71,6 @@ static void PrintShader()
         {
             std::print(" ");
         }
-        ++i;
     }
     std::print("{}\n", ANSI_RESET);
     std::print("I made it for you! :3\n");
@@ -86,3 +92,4 @@ VkResult CreateConvolverShader(VkDevice Device, VkShaderModule& ShaderModule)
 
     return vkCreateShaderModule(Device, &CreateInfo, nullptr, &ShaderModule);
 }
+

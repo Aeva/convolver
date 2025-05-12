@@ -57,7 +57,6 @@ def graph_search(graph, name):
 
 
 INCLUDES = re.compile(r'^\s*#include\s*\"(.+)\"\s*$', re.M)
-EMBEDS = re.compile(r'^\s*#embed\s*\"(.+)\"\s*$', re.M)
 
 GLSL_COMMON = " ".join([
     "glslangValidator",
@@ -66,15 +65,15 @@ GLSL_COMMON = " ".join([
     "--nan-clamp",
     "-V",
     "-e main",
+    "-x",
 ])
 
 CPP_COMMON = " ".join([
     "clang++",
     "-c",
     "-std=c++2c",
-    "-Wc23-extensions",
     "-DGROUP_SIZE=8",
-    f"-I{os.path.abspath("scratch")}/",
+    f"-I{os.path.abspath("scratch/..")}/",
     "-I/usr/include/pipewire-0.3",
     "-I/usr/include/spa-0.2",
 ])
@@ -98,7 +97,6 @@ class FileInfo:
         self.modified = None
         self.hash = None
         self.includes = []
-        self.embeds = []
         self.partial = True
         self.dirty = False
         self.artifact = None
@@ -116,9 +114,6 @@ class FileInfo:
                 text = f.read()
                 self.includes = INCLUDES.findall(text)
 
-                if self.type == "c++":
-                    self.embeds = EMBEDS.findall(text)
-
         if self.type == "glsl":
             self.artifact = SRC_PREFIX.sub('scratch/', GLSL_SUFFIX.sub('.spirv', path))
 
@@ -135,21 +130,10 @@ class FileInfo:
                 if node := graph_search(graph, partial):
                     self.includes.append(node)
 
-            partials = self.embeds
-            self.embeds = []
-            for partial in partials:
-                if node := graph_search(graph, partial):
-                    self.embeds.append(node)
-
-            for node in self.embeds:
-                dirty, sequence = node.populate(graph, journal, sequence)
-                self.dirty = self.dirty or dirty
-
             if not self.dirty:
                 for node in self.includes:
-                    self.dirty, sequence = node.populate(graph, journal, sequence)
-                    if self.dirty:
-                        break
+                    dirty, sequence = node.populate(graph, journal, sequence)
+                    self.dirty = self.dirty or dirty
 
             if not self.dirty:
                 if old := journal.get(self.path):
