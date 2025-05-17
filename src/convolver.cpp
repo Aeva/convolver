@@ -1,5 +1,5 @@
 
-#define LIVE_STREAM_MODE 0
+#define LIVE_STREAM_MODE 1
 #define BENCHMARKING 1
 
 #include <SDL3/SDL.h>
