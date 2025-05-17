@@ -184,14 +184,14 @@ PipeWireFilter::PipeWireFilter(ThreadShared* BufferState, int SampleRate)
 
     Filter = pw_filter_new_simple(
         pw_thread_loop_get_loop(Loop),
-                                    "convolver",
-                                    pw_properties_new(
-                                        PW_KEY_MEDIA_TYPE, "Audio",
-                                        PW_KEY_MEDIA_CATEGORY, "Filter",
-                                        PW_KEY_MEDIA_ROLE, "DSP",
-                                        nullptr),
-                                    &FilterEvents,
-                                    &RealTimeThread);
+        "convolver",
+        pw_properties_new(
+            PW_KEY_MEDIA_TYPE, "Audio",
+            PW_KEY_MEDIA_CATEGORY, "Filter",
+            PW_KEY_MEDIA_ROLE, "DSP",
+            nullptr),
+        &FilterEvents,
+        &RealTimeThread);
 
     RealTimeThread.SetupPorts(BufferState, Filter);
 
