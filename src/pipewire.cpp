@@ -206,7 +206,7 @@ PipeWireFilter::PipeWireFilter(ThreadShared* BufferState, int SampleRate)
     {
         spa_audio_info_raw StreamFormat =
         {
-            .format = SPA_AUDIO_FORMAT_DSP_F32,
+            .format = SPA_AUDIO_FORMAT_S16,
             .rate = (uint32_t)SampleRate,
             .channels = 1
         };

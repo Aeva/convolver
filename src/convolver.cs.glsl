@@ -59,6 +59,6 @@ void main()
 
     if (subgroupElect())
     {
-        BufferC.Data[Sample % SizeC] = int16_t(int(Total * ScaleB));
+        BufferC.Data[Sample % SizeC] = int16_t(int(Total * ScaleC));
     }
 }

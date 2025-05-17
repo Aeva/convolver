@@ -48,11 +48,11 @@ struct ConvolverParameters
         : SampleRate(InSampleRate)
         , GroupSize(InGroupSize)
         , TargetSamplesPerFrame(int32_t(float(SampleRate) / 1000.0f * IdealMinFrameDurationMs))
-        , TargetBytesPerFrame(TargetSamplesPerFrame * sizeof(uint16_t))
+        , TargetBytesPerFrame(TargetSamplesPerFrame * sizeof(int16_t))
         , GroupsPerFrame(std::max(MinGroupsPerFrame, int32_t(DIV_UP(TargetSamplesPerFrame, GroupSize))) * GroupSize)
         , SamplesPerFrame(GroupsPerFrame)
         , FrameSpan(double(SamplesPerFrame) / double(SampleRate) * 1000.0)
-        , BytesPerFrame(sizeof(uint16_t) * SamplesPerFrame)
+        , BytesPerFrame(sizeof(int16_t) * SamplesPerFrame)
     {
     }
 
@@ -209,7 +209,7 @@ struct SharedMemory
         }
     }
 
-    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, std::vector<uint16_t> Upload)
+    SharedMemory(VkDevice InDevice, uint32_t MemoryTypeIndex, uint32_t QueueFamilyIndex, std::vector<int16_t> Upload)
         requires std::integral<ElementType>
         : SharedMemory(InDevice, MemoryTypeIndex, QueueFamilyIndex, Upload.size())
     {
@@ -307,7 +307,7 @@ struct WaveStream
         }
     }
 
-    void Transcode(std::vector<uint16_t>& OutSamples)
+    void Transcode(std::vector<int16_t>& OutSamples)
     {
         if (Stream)
         {
@@ -318,7 +318,7 @@ struct WaveStream
             OutSamples.resize(SampleCount);
 
             uint32_t OutBytes = SampleCount * TargetFrameSize;
-            uint8_t* TargetData = (uint8_t*)OutSamples.data();
+            int8_t* TargetData = (int8_t*)OutSamples.data();
             SDL_GetAudioStreamData(Stream, TargetData, OutBytes);
             Reset("transcoder");
         }
@@ -353,7 +353,7 @@ struct WaveStream
 
 struct WaveData
 {
-    std::vector<uint16_t> Samples;
+    std::vector<int16_t> Samples;
     float Scale = 1.0f;
 
     WaveData()
@@ -374,7 +374,7 @@ struct WaveData
     void NormalizeImpulseResponse()
     {
         float Acc = 0.0f;
-        for (const uint16_t& Sample : Samples)
+        for (const int16_t& Sample : Samples)
         {
             Acc += std::abs(float(Sample) / float(0x7fff));
         }
@@ -997,7 +997,7 @@ int main(int argc, char *argv[])
                 break;
             }
             while (BytesReady < Params.BytesPerFrame);
-            const int32_t SamplesReady = BytesReady / sizeof(uint16_t);
+            const int32_t SamplesReady = BytesReady / sizeof(int16_t);
 
             // This is currently guaranteed: (Start % SamplesPerFrame) == 0
             const int WriteStart = (FrameNumber % HistoryPages) * Params.SamplesPerFrame;
@@ -1142,9 +1142,9 @@ int main(int argc, char *argv[])
             std::print("Not enough samples recorded for benchmarking.\n\n");
         }
 
-        std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(uint16_t)) / 1024.0);
-        std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(uint16_t)) / 1024.0);
-        std::print("\t      Output ring: {:.2f} KiB\n", double(SizeC * sizeof(uint16_t)) / 1024.0);
+        std::print("\t       Input ring: {:.2f} KiB\n", double(SizeA * sizeof(int16_t)) / 1024.0);
+        std::print("\t       Convolvand: {:.2f} KiB\n", double(SizeB * sizeof(int16_t)) / 1024.0);
+        std::print("\t      Output ring: {:.2f} KiB\n", double(SizeC * sizeof(int16_t)) / 1024.0);
         std::print("\n");
 
         std::print("\tSamples per frame: {}\n", Params.SamplesPerFrame);
