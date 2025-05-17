@@ -2,6 +2,8 @@
 #define LIVE_STREAM_MODE 1
 #define BENCHMARKING 1
 
+#define VALIDATION_LAYERS 0
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_events.h>
@@ -458,8 +460,9 @@ int main(int argc, char *argv[])
 
     std::set<std::string> RequestedLayers;
     {
+#if VALIDATION_LAYERS
         RequestedLayers.emplace("VK_LAYER_KHRONOS_validation");
-        // RequestedLayers.emplace("VK_LAYER_RENDERDOC_Capture");
+#endif
     }
 
     std::vector<VkLayerProperties> AvailableLayers;
