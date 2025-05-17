@@ -421,11 +421,20 @@ int main(int argc, char *argv[])
         };
 
         int ImportFrequency;
+        if (argc >= 2)
+        {
+            WaveB = WaveData(OutSpec, argv[1], true);
+        }
+        else
+        {
 #if LIVE_STREAM_MODE
-        WaveB = WaveData(OutSpec, "revolver.wav", true);
+            WaveB = WaveData(OutSpec, "revolver.wav", true);
 #else
-        WaveB = WaveData(OutSpec, "chest.wav", true);
+            WaveB = WaveData(OutSpec, "chest.wav", true);
+#endif
+        }
 
+#if !LIVE_STREAM_MODE
         WaveA = new WaveStream(OutSpec, "strange_birds.wav");
         InStream = WaveA->Stream;
         OutStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &OutSpec, nullptr, nullptr);
