@@ -84,6 +84,7 @@ LINK_COMMON = " ".join([
     "-lvulkan",
     "-lSDL3",
     "-lpipewire-0.3",
+    "-flto",
 ])
 
 
